@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><?= systemName ?> | <?= orgName ?></title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <?!= include('Styles') ?>
+</head>
+<body>
+
+  <!-- ===================== Login Screen ===================== -->
+  <div id="loginScreen" class="login-screen">
+    <!-- decorative background layers -->
+    <div class="login-bg">
+      <div class="login-bg-grid"></div>
+      <div class="login-blob login-blob-1"></div>
+      <div class="login-blob login-blob-2"></div>
+      <div class="login-blob login-blob-3"></div>
+      <div class="login-shine"></div>
+    </div>
+
+    <div class="login-split">
+      <!-- ===== HERO side (desktop) ===== -->
+      <aside class="login-hero">
+        <div class="login-hero-top">
+          <div class="login-brand-big">
+            <div class="login-brand-mark-big"><i class="fa-solid fa-car-side"></i></div>
+            <div>
+              <div class="login-brand-sys-big"><?= systemName ?></div>
+              <div class="login-brand-org-big"><?= orgName ?></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="login-hero-middle">
+          <div class="login-hero-pill"><i class="fa-solid fa-wand-magic-sparkles"></i> Premium Edition · เวอร์ชัน 1.0</div>
+          <h2 class="login-hero-headline">
+            บริหารยานพาหนะราชการ<br>
+            <span class="login-hero-accent">อย่างมืออาชีพ ครบวงจร</span>
+          </h2>
+          <p class="login-hero-desc">
+            ตั้งแต่ยื่นคำขอ อนุมัติหลายขั้น จัดสรรรถ/คนขับ จนถึงบันทึกการเดินทาง
+            พร้อมรายงานแดชบอร์ดผู้บริหารเรียลไทม์
+          </p>
+        </div>
+
+        <ul class="login-hero-features">
+          <li>
+            <span class="feat-ico grad-emerald"><i class="fa-solid fa-file-lines"></i></span>
+            <div><strong>ฟอร์มคำขอครบชุด</strong><span>ตรวจสอบวันเวลา / จำนวนผู้โดยสารอัตโนมัติ</span></div>
+          </li>
+          <li>
+            <span class="feat-ico grad-sky"><i class="fa-solid fa-circle-check"></i></span>
+            <div><strong>อนุมัติ 2 ขั้น</strong><span>หัวหน้าแผนก → ผู้จัดการรถ + แจ้งเตือนอีเมล</span></div>
+          </li>
+          <li>
+            <span class="feat-ico grad-violet"><i class="fa-solid fa-chart-column"></i></span>
+            <div><strong>แดชบอร์ดผู้บริหาร</strong><span>กราฟ สถิติ รายงาน real-time ทุกโมดูล</span></div>
+          </li>
+          <li>
+            <span class="feat-ico grad-amber"><i class="fa-solid fa-shield-halved"></i></span>
+            <div><strong>ปลอดภัยระดับมาตรฐาน</strong><span>Hash SHA-256 + session 8 ชั่วโมง + audit log</span></div>
+          </li>
+        </ul>
+
+        <div class="login-hero-stats">
+          <div class="login-stat"><div class="login-stat-num">5</div><div class="login-stat-lb">บทบาท</div></div>
+          <div class="login-stat"><div class="login-stat-num">11</div><div class="login-stat-lb">โมดูล</div></div>
+          <div class="login-stat"><div class="login-stat-num">24/7</div><div class="login-stat-lb">Real-time</div></div>
+        </div>
+      </aside>
+
+      <!-- ===== FORM side ===== -->
+      <main class="login-panel">
+        <div class="login-card">
+          <div class="login-card-head">
+            <div class="login-brand-mark-sm"><i class="fa-solid fa-car-side"></i></div>
+            <div>
+              <h1 class="login-welcome">ยินดีต้อนรับกลับมา <span class="login-wave"><i class="fa-solid fa-hand-sparkles"></i></span></h1>
+              <p class="login-welcome-sub">กรุณาเข้าสู่ระบบเพื่อจัดการคำขอใช้รถของหน่วยงาน</p>
+            </div>
+          </div>
+
+          <form id="loginForm" class="login-form" onsubmit="return false" autocomplete="on">
+            <div class="login-field">
+              <label for="loginUsername" class="login-field-label">ชื่อผู้ใช้</label>
+              <div class="login-input-wrap">
+                <span class="login-input-ico"><i class="fa-solid fa-user"></i></span>
+                <input type="text" id="loginUsername" class="login-input"
+                       autocomplete="username" required autocapitalize="off"
+                       placeholder="กรอกชื่อผู้ใช้">
+              </div>
+            </div>
+
+            <div class="login-field">
+              <label for="loginPassword" class="login-field-label">รหัสผ่าน</label>
+              <div class="login-input-wrap">
+                <span class="login-input-ico"><i class="fa-solid fa-lock"></i></span>
+                <input type="password" id="loginPassword" class="login-input"
+                       autocomplete="current-password" required
+                       placeholder="กรอกรหัสผ่าน">
+                <button type="button" class="login-pass-toggle" id="loginPassToggle"
+                        aria-label="แสดง/ซ่อนรหัสผ่าน" title="แสดง/ซ่อนรหัสผ่าน">
+                  <i class="fa-solid fa-eye eye-icon"></i>
+                </button>
+              </div>
+              <div class="login-capslock" id="loginCapslock" hidden><i class="fa-solid fa-triangle-exclamation"></i> Caps Lock กำลังเปิดอยู่</div>
+            </div>
+
+            <div class="login-row-meta">
+              <label class="login-checkbox">
+                <input type="checkbox" id="loginRemember">
+                <span class="login-checkbox-mark"></span>
+                <span>จดจำฉัน</span>
+              </label>
+              <button type="button" class="login-forgot" id="loginForgot">ลืมรหัสผ่าน?</button>
+            </div>
+
+            <div id="loginError" class="login-error" hidden></div>
+
+            <button type="button" id="loginBtn" class="btn-app-login">
+              <span class="btn-app-login-spinner" aria-hidden="true"></span>
+              <span class="btn-app-login-text">เข้าสู่ระบบ</span>
+              <span class="btn-app-login-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+            </button>
+          </form>
+
+          <div class="login-divider"><span>หรือใช้บัญชีทดสอบ</span></div>
+
+          <div class="login-hint-grid">
+            <button type="button" class="login-chip" data-user="admin"    data-pass="Admin@123"    data-role="admin">
+              <span class="login-chip-ico"><i class="fa-solid fa-crown"></i></span>
+              <span class="login-chip-label">admin</span>
+            </button>
+            <button type="button" class="login-chip" data-user="manager"  data-pass="Manager@123"  data-role="manager">
+              <span class="login-chip-ico"><i class="fa-solid fa-briefcase"></i></span>
+              <span class="login-chip-label">manager</span>
+            </button>
+            <button type="button" class="login-chip" data-user="approver" data-pass="Approver@123" data-role="approver">
+              <span class="login-chip-ico"><i class="fa-solid fa-user-check"></i></span>
+              <span class="login-chip-label">approver</span>
+            </button>
+            <button type="button" class="login-chip" data-user="user"     data-pass="User@123"     data-role="user">
+              <span class="login-chip-ico"><i class="fa-solid fa-user"></i></span>
+              <span class="login-chip-label">user</span>
+            </button>
+            <button type="button" class="login-chip" data-user="driver"   data-pass="Driver@123"   data-role="driver">
+              <span class="login-chip-ico"><i class="fa-solid fa-id-card"></i></span>
+              <span class="login-chip-label">driver</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="login-legal">
+          <span>© 2025 <?= orgName ?></span>
+          <span class="login-legal-dot">·</span>
+          <span>เวอร์ชัน 1.0</span>
+          <span class="login-legal-dot">·</span>
+          <a href="https://www.kruwirat.com" target="_blank" rel="noopener">พัฒนาโดย kruwirat</a>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ===================== App Shell ===================== -->
+  <div id="app" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-mark"><i class="fa-solid fa-car-side"></i></div>
+        <div class="sidebar-title">
+          <div class="sidebar-sys"><?= systemName ?></div>
+          <div class="sidebar-org"><?= orgName ?></div>
+        </div>
+      </div>
+
+      <div class="sidebar-meta">
+        <div class="side-clock" aria-live="off">
+          <div class="side-clock-time" id="sideClockTime">--:--:--</div>
+          <div class="side-clock-date" id="sideClockDate">—</div>
+        </div>
+        <div class="side-role-badge" id="sideRoleBadge" title="บทบาท">—</div>
+      </div>
+
+      <nav id="sidenav" class="sidenav"></nav>
+      <div class="sidebar-foot">
+        <div class="user-chip" id="userChip">
+          <div class="avatar" id="userAvatar">U</div>
+          <div class="user-info">
+            <div class="user-name" id="userName">—</div>
+            <div class="user-role" id="userRole">—</div>
+          </div>
+        </div>
+        <button id="logoutBtn" class="btn btn-ghost btn-block">ออกจากระบบ</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="hamburger" id="hamburger" aria-label="เมนู"><i class="fa-solid fa-bars"></i></button>
+        <h1 class="page-title" id="pageTitle">แดชบอร์ด</h1>
+        <div class="topbar-right">
+          <button class="btn btn-ghost" id="changePassBtn"><i class="fa-solid fa-key"></i> เปลี่ยนรหัสผ่าน</button>
+        </div>
+      </header>
+      <div class="page" id="page"></div>
+
+      <!-- ===================== Footer ===================== -->
+      <footer class="app-footer">
+        <div class="app-footer-left">
+          <span class="app-footer-copy">2025 © <?= systemName ?></span>
+        </div>
+        <div class="app-footer-right">
+          <span class="app-footer-devby">ผู้พัฒนาโดย :</span>
+          <a class="app-footer-devlink" href="https://www.kruwirat.com" target="_blank" rel="noopener">
+            <img class="app-footer-devlogo"
+                 src="https://mts-ssk3.com/uploads/team/team_1771053860_6990232440dc8.png"
+                 alt="Developer logo"
+                 referrerpolicy="no-referrer"
+                 loading="lazy" />
+            <span class="app-footer-devname">www.kruwirat.com</span>
+          </a>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ===================== Modal ===================== -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" id="modalCard">
+      <div class="modal-head">
+        <h3 id="modalTitle">—</h3>
+        <button class="modal-close" data-close aria-label="ปิด">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-foot" id="modalFoot"></div>
+    </div>
+  </div>
+
+  <!-- ===================== Toast ===================== -->
+  <div id="toasts" class="toasts"></div>
+
+  <!-- ===================== Loader (Premium Status) ===================== -->
+  <div id="loader" class="loader" hidden aria-live="polite" aria-busy="true">
+    <div class="loader-backdrop"></div>
+    <div class="loader-card">
+      <div class="loader-anim">
+        <div class="loader-ring loader-ring-1"></div>
+        <div class="loader-ring loader-ring-2"></div>
+        <div class="loader-ring loader-ring-3"></div>
+        <div class="loader-core"><span id="loaderCoreIcon" class="loader-core-icon"><i class="fa-solid fa-car-side"></i></span></div>
+      </div>
+      <div class="loader-text">
+        <div class="loader-msg"><span id="loaderMsg">กำลังประมวลผล</span><span class="loader-dots" aria-hidden="true"></span></div>
+        <div class="loader-sub" id="loaderSub">โปรดรอสักครู่…</div>
+      </div>
+      <div class="loader-progress"><div class="loader-progress-bar"></div></div>
+    </div>
+  </div>
+
+  <?!= include('Views') ?>
+  <?!= include('App') ?>
+</body>
+</html>

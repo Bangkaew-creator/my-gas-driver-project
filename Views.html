@@ -1,0 +1,2277 @@
+<script>
+/* ============================================================================
+ *  Views.html — HTML render templates สำหรับแต่ละหน้า
+ *  ใช้รูปแบบ:  Views.<name>(data, ctx) => HTML string
+ *  เรียกผ่าน:  App.render(viewName, data)
+ * ============================================================================ */
+(function (global) {
+  'use strict';
+
+  /* ---------- helper format ---------- */
+  const H = {
+    esc(s) {
+      if (s === null || s === undefined) return '';
+      return String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    },
+    num(n) { return (n == null || isNaN(n)) ? '-' : Number(n).toLocaleString('th-TH'); },
+    money(n) { return (n == null || isNaN(n)) ? '-' : Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
+    date(d) {
+      if (!d) return '-';
+      const dt = new Date(d);
+      if (isNaN(dt.getTime())) return '-';
+      return dt.toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: 'numeric' });
+    },
+    datetime(d) {
+      if (!d) return '-';
+      const dt = new Date(d);
+      if (isNaN(dt.getTime())) return '-';
+      return dt.toLocaleString('th-TH', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    },
+    statusBadge(status, label, color) {
+      return `<span class="badge" style="background:${color || '#e2e8f0'};color:#fff">${H.esc(label || status)}</span>`;
+    },
+    empty(msg) {
+      return `<div class="empty-state"><div class="empty-icon"><i class="fa-solid fa-inbox"></i></div><div class="empty-text">${H.esc(msg || 'ไม่พบข้อมูล')}</div></div>`;
+    }
+  };
+  global.H = H;
+
+  const Views = {};
+
+  /* ========================================================================
+   *  DASHBOARD — Super Dashboard (Glassmorphism + Charts + Print)
+   *    logic เดิม 100% (ใช้ d.stats + d.recent เหมือนเดิม)
+   *    เพิ่มเลเยอร์ UI: hero, info-box, charts, progress, medals, score, table
+   * ====================================================================== */
+  Views.dashboard = function (d) {
+    const s = d.stats || {};
+    const recent = d.recent || [];
+
+    // ----- KPI info boxes (Glassmorphism + Gradient icons + shimmer) -----
+    const kpi = [
+      { k: 'total',    label: 'คำขอทั้งหมด',   val: s.totalRequests || 0, icon: 'fa-clipboard-list',     grad: 'grad-emerald',  trend: s.thisMonthCount,  trendLabel: 'เดือนนี้' },
+      { k: 'pending',  label: 'รออนุมัติ',     val: s.pending || 0,       icon: 'fa-hourglass-half',     grad: 'grad-amber',    trend: s.myPending,       trendLabel: 'คิวของฉัน' },
+      { k: 'approved', label: 'อนุมัติแล้ว',   val: s.approved || 0,      icon: 'fa-circle-check',       grad: 'grad-sky',      trend: null },
+      { k: 'progress', label: 'กำลังเดินทาง',  val: s.inProgress || 0,    icon: 'fa-route',              grad: 'grad-violet',   trend: null },
+      { k: 'done',     label: 'เสร็จสิ้น',     val: s.completed || 0,     icon: 'fa-flag-checkered',     grad: 'grad-slate',    trend: null },
+      { k: 'vehicles', label: 'รถยนต์ทั้งหมด', val: s.vehicles || 0,      icon: 'fa-car-side',           grad: 'grad-teal',     trend: s.vehiclesAvailable, trendLabel: 'ว่าง' },
+      { k: 'avail',    label: 'รถว่าง',        val: s.vehiclesAvailable || 0, icon: 'fa-circle',         grad: 'grad-lime',     trend: null },
+      { k: 'drivers',  label: 'คนขับ',         val: s.drivers || 0,       icon: 'fa-id-card',            grad: 'grad-rose',     trend: s.driversActive, trendLabel: 'พร้อม' }
+    ];
+
+    const infoBoxes = kpi.map((c, i) => `
+      <div class="info-box" style="--delay:${i * 60}ms" data-kpi="${c.k}">
+        <div class="info-shimmer"></div>
+        <div class="info-icon ${c.grad}"><i class="fa-solid ${c.icon}"></i></div>
+        <div class="info-body">
+          <div class="info-value">${H.num(c.val)}</div>
+          <div class="info-label">${H.esc(c.label)}</div>
+          ${c.trend != null ? `<div class="info-trend"><span class="trend-badge"><i class="fa-solid fa-arrow-trend-up"></i> ${H.num(c.trend)} ${H.esc(c.trendLabel || '')}</span></div>` : ''}
+        </div>
+      </div>`).join('');
+
+    // ----- Score Display boxes -----
+    const scoreBoxes = `
+      <div class="score-display">
+        <div class="score-ribbon"><i class="fa-solid fa-star"></i> SCORE</div>
+        <div class="score-label">ระยะทางรวมทั้งหมด</div>
+        <div class="score-value">
+          <span class="score-num">${H.num(s.totalDistance || 0)}</span>
+          <span class="score-unit">กม.</span>
+        </div>
+        <div class="score-caption">สะสมจากทุกการเดินทางที่บันทึกในระบบ</div>
+      </div>
+      <div class="score-display score-alt">
+        <div class="score-ribbon"><i class="fa-solid fa-star"></i> QUEUE</div>
+        <div class="score-label">คิวรออนุมัติของฉัน</div>
+        <div class="score-value">
+          <span class="score-num">${H.num(s.myPending || 0)}</span>
+          <span class="score-unit">รายการ</span>
+        </div>
+        <div class="score-caption">ต้องดำเนินการโดยผู้ใช้งานปัจจุบัน</div>
+      </div>
+    `;
+
+    // ----- Progress bars (ratios) -----
+    const pctOf = (a, b) => b > 0 ? Math.round((a / b) * 100) : 0;
+    const progressItems = [
+      { icon: 'fa-circle-check',    label: 'อัตราการอนุมัติ',    pct: pctOf(s.approved + s.completed + s.inProgress, s.totalRequests), grad: 'linear-gradient(90deg,#10b981,#34d399)' },
+      { icon: 'fa-car-side',        label: 'อัตราการใช้รถ',      pct: pctOf(s.vehiclesInUse || 0, s.vehicles || 0), grad: 'linear-gradient(90deg,#8b5cf6,#a78bfa)' },
+      { icon: 'fa-flag-checkered',  label: 'อัตราคำขอเสร็จสิ้น',  pct: pctOf(s.completed || 0, s.totalRequests), grad: 'linear-gradient(90deg,#0ea5e9,#38bdf8)' },
+      { icon: 'fa-users',           label: 'คนขับที่พร้อมงาน',    pct: pctOf(s.driversActive || 0, s.drivers || 0), grad: 'linear-gradient(90deg,#f59e0b,#fbbf24)' }
+    ];
+    const progressList = progressItems.map(p => `
+      <div class="progress-row">
+        <div class="progress-label">
+          <span class="progress-ico"><i class="fa-solid ${p.icon}"></i></span>
+          <span class="progress-text">${H.esc(p.label)}</span>
+          <span class="progress-pct">${p.pct}%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width:${p.pct}%;background:${p.grad}"></div>
+        </div>
+      </div>`).join('');
+
+    // ----- Medal badges -----
+    const medals = [
+      { rank: 'gold',   icon: 'fa-trophy',  title: 'รถพร้อมใช้งาน', val: s.vehiclesAvailable || 0, unit: 'คัน' },
+      { rank: 'silver', icon: 'fa-medal',   title: 'คนขับพร้อมงาน', val: s.driversActive || 0,     unit: 'คน' },
+      { rank: 'bronze', icon: 'fa-award',   title: 'คำขอเดือนนี้',   val: s.thisMonthCount || 0,   unit: 'รายการ' }
+    ];
+    const medalRow = medals.map(m => `
+      <div class="medal medal-${m.rank}">
+        <div class="medal-icon"><i class="fa-solid ${m.icon}"></i></div>
+        <div class="medal-title">${H.esc(m.title)}</div>
+        <div class="medal-value">${H.num(m.val)}</div>
+        <div class="medal-sub">${H.esc(m.unit)}</div>
+      </div>`).join('');
+
+    // ----- Status filter options for recent table -----
+    const statusOptions = [
+      ['',            'ทุกสถานะ'],
+      ['pending',     'รออนุมัติ'],
+      ['approved_l1', 'รอจัดสรรรถ'],
+      ['approved',    'อนุมัติแล้ว'],
+      ['in_progress', 'กำลังเดินทาง'],
+      ['completed',   'เสร็จสิ้น'],
+      ['rejected',    'ไม่อนุมัติ'],
+      ['cancelled',   'ยกเลิก']
+    ].map(([v, l]) => `<option value="${H.esc(v)}">${H.esc(l)}</option>`).join('');
+
+    // ----- Recent rows -----
+    const recentRows = recent.map(r => `
+      <tr data-id="${H.esc(r.id)}" class="clickable" data-status="${H.esc(r.status)}" data-start="${H.esc(r.start_datetime || '')}">
+        <td><code>${H.esc(r.request_no)}</code></td>
+        <td>${H.esc(r.requester_name)}</td>
+        <td>${H.esc(r.purpose).slice(0, 40)}</td>
+        <td>${H.datetime(r.start_datetime)}</td>
+        <td>${H.statusBadge(r.status, r.status_label, r.status_color)}</td>
+      </tr>`).join('') || `<tr><td colspan="5" class="muted">ไม่มีคำขอล่าสุด</td></tr>`;
+
+    // ----- Embedded data for charts (read by App.wireDashboard) -----
+    const chartData = {
+      statusBreakdown: {
+        labels: ['รออนุมัติ', 'รอจัดสรร', 'อนุมัติ', 'กำลังเดินทาง', 'เสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิก'],
+        values: [
+          s.pending || 0,
+          0, // approved_l1 ไม่ได้ส่งตรงมา แต่นับรวมใน pending แล้ว
+          s.approved || 0,
+          s.inProgress || 0,
+          s.completed || 0,
+          s.rejected || 0,
+          s.cancelled || 0
+        ],
+        colors: ['#f59e0b', '#3b82f6', '#10b981', '#8b5cf6', '#64748b', '#ef4444', '#9ca3af']
+      },
+      fleet: {
+        labels: ['พร้อมใช้งาน', 'กำลังใช้งาน', 'ซ่อมบำรุง'],
+        values: [s.vehiclesAvailable || 0, s.vehiclesInUse || 0, s.vehiclesMaint || 0],
+        colors: ['#10b981', '#8b5cf6', '#f59e0b']
+      }
+    };
+
+    // ----- Compose -----
+    return `
+      <div class="dash" id="dashRoot">
+        <!-- Premium Hero -->
+        <section class="dash-hero">
+          <div class="dash-hero-decor"></div>
+          <div class="dash-hero-inner">
+            <div class="dash-hero-title">
+              <div class="dash-hero-emoji"><i class="fa-solid fa-chart-column"></i></div>
+              <div>
+                <h1 class="dash-hero-h">แดชบอร์ดผู้บริหาร</h1>
+                <div class="dash-hero-sub">ภาพรวมระบบขอใช้รถราชการ · อัปเดต ${H.datetime(new Date().toISOString())}</div>
+              </div>
+            </div>
+            <div class="dash-hero-actions">
+              <div class="theme-switcher" role="group" aria-label="เลือกโทนสี">
+                <button class="theme-dot theme-emerald" data-theme="emerald" title="มรกต"></button>
+                <button class="theme-dot theme-sapphire" data-theme="sapphire" title="แซฟไฟร์"></button>
+                <button class="theme-dot theme-ruby" data-theme="ruby" title="ทับทิม"></button>
+                <button class="theme-dot theme-amber" data-theme="amber" title="อำพัน"></button>
+                <button class="theme-dot theme-slate" data-theme="slate" title="กราไฟต์"></button>
+              </div>
+              <button class="btn-app btn-app-primary" id="btnPrintDash">
+                <span class="btn-app-ico"><i class="fa-solid fa-print"></i></span>
+                <span>พิมพ์ / PDF</span>
+              </button>
+              <button class="btn-app btn-app-ghost" id="btnRefreshDash">
+                <span class="btn-app-ico"><i class="fa-solid fa-arrows-rotate"></i></span>
+                <span>รีเฟรช</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Filter bar -->
+        <section class="dash-filter" id="dashFilter">
+          <div class="filter-group">
+            <label class="filter-field">
+              <span class="filter-label"><i class="fa-solid fa-calendar-day"></i> จากวันที่</span>
+              <input type="date" id="dashFrom" class="filter-input">
+            </label>
+            <label class="filter-field">
+              <span class="filter-label"><i class="fa-solid fa-calendar-check"></i> ถึงวันที่</span>
+              <input type="date" id="dashTo" class="filter-input">
+            </label>
+            <label class="filter-field">
+              <span class="filter-label"><i class="fa-solid fa-tag"></i> สถานะ</span>
+              <select id="dashStatus" class="filter-input">${statusOptions}</select>
+            </label>
+            <label class="filter-field">
+              <span class="filter-label"><i class="fa-solid fa-magnifying-glass"></i> ค้นหา</span>
+              <input type="text" id="dashSearch" class="filter-input" placeholder="เลขที่ / ผู้ขอ / วัตถุประสงค์">
+            </label>
+          </div>
+          <div class="filter-actions">
+            <button class="btn-app btn-app-ghost" id="btnClearFilter">ล้างตัวกรอง</button>
+          </div>
+        </section>
+
+        <!-- Info Boxes (Glassmorphism + Staggered) -->
+        <section class="info-grid">${infoBoxes}</section>
+
+        <!-- Score Display -->
+        <section class="score-row">${scoreBoxes}</section>
+
+        <!-- Charts -->
+        <section class="chart-grid" data-chart-data='${H.esc(JSON.stringify(chartData))}'>
+          <div class="chart-card chart-donut">
+            <div class="chart-head">
+              <h3>การกระจายตามสถานะคำขอ</h3>
+              <span class="chart-sub">Donut</span>
+            </div>
+            <div class="chart-wrap"><canvas id="chartStatus"></canvas></div>
+            <div class="chart-legend" id="legendStatus"></div>
+          </div>
+          <div class="chart-card chart-bar">
+            <div class="chart-head">
+              <h3>สถานะรถยนต์</h3>
+              <span class="chart-sub">Bar</span>
+            </div>
+            <div class="chart-wrap"><canvas id="chartFleet"></canvas></div>
+          </div>
+          <div class="chart-card chart-line">
+            <div class="chart-head">
+              <h3>แนวโน้มคำขอ (ล่าสุด)</h3>
+              <span class="chart-sub">Line</span>
+            </div>
+            <div class="chart-wrap"><canvas id="chartTrend"></canvas></div>
+          </div>
+          <div class="chart-card chart-inline">
+            <div class="chart-head">
+              <h3>Inline sparkline</h3>
+              <span class="chart-sub">Inline</span>
+            </div>
+            <div class="inline-chart-list">
+              <div class="inline-chart-row">
+                <span class="inline-chart-label">อนุมัติ</span>
+                <svg class="sparkline" viewBox="0 0 120 24" preserveAspectRatio="none">
+                  <polyline fill="none" stroke="#10b981" stroke-width="2"
+                    points="0,18 15,14 30,16 45,10 60,12 75,6 90,9 105,4 120,7"/>
+                </svg>
+                <span class="inline-chart-value">${H.num(s.approved || 0)}</span>
+              </div>
+              <div class="inline-chart-row">
+                <span class="inline-chart-label">เสร็จสิ้น</span>
+                <svg class="sparkline" viewBox="0 0 120 24" preserveAspectRatio="none">
+                  <polyline fill="none" stroke="#0ea5e9" stroke-width="2"
+                    points="0,20 15,18 30,15 45,16 60,12 75,10 90,8 105,6 120,4"/>
+                </svg>
+                <span class="inline-chart-value">${H.num(s.completed || 0)}</span>
+              </div>
+              <div class="inline-chart-row">
+                <span class="inline-chart-label">ยกเลิก</span>
+                <svg class="sparkline" viewBox="0 0 120 24" preserveAspectRatio="none">
+                  <polyline fill="none" stroke="#ef4444" stroke-width="2"
+                    points="0,18 15,16 30,14 45,15 60,17 75,14 90,16 105,14 120,12"/>
+                </svg>
+                <span class="inline-chart-value">${H.num(s.cancelled || 0)}</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Progress Bars -->
+        <section class="card progress-card">
+          <div class="card-head">
+            <h3><i class="fa-solid fa-chart-line"></i> ตัวชี้วัดหลัก</h3>
+            <span class="muted">Progress</span>
+          </div>
+          <div class="progress-list">${progressList}</div>
+        </section>
+
+        <!-- Medal Row -->
+        <section class="medal-row">${medalRow}</section>
+
+        <!-- Recent Table -->
+        <section class="card">
+          <div class="card-head">
+            <h2><i class="fa-solid fa-clock-rotate-left"></i> คำขอล่าสุด</h2>
+            <span class="muted">${H.num(recent.length)} รายการ</span>
+          </div>
+          <div class="table-wrap">
+            <table class="table table-hover" id="recentTable">
+              <thead><tr><th>เลขที่</th><th>ผู้ขอ</th><th>วัตถุประสงค์</th><th>วันที่ใช้</th><th>สถานะ</th></tr></thead>
+              <tbody id="recentBody">${recentRows}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    `;
+  };
+
+  /* ========================================================================
+   *  REQUEST LIST (ของฉัน / ทั้งหมด)
+   * ====================================================================== */
+  Views.requestList = function (d) {
+    const rows = (d.items || []).map(r => `
+      <tr data-id="${H.esc(r.id)}" class="clickable">
+        <td><code>${H.esc(r.request_no)}</code></td>
+        <td>${H.esc(r.requester_name || '')}</td>
+        <td>${H.esc(r.department || '')}</td>
+        <td>${H.esc(r.purpose).slice(0, 50)}</td>
+        <td>${H.datetime(r.start_datetime)}</td>
+        <td>${H.datetime(r.end_datetime)}</td>
+        <td>${H.num(r.passengers)}</td>
+        <td>${H.statusBadge(r.status, r.status_label, r.status_color)}</td>
+      </tr>`).join('') || `<tr><td colspan="8">${H.esc('ไม่มีคำขอ')}</td></tr>`;
+
+    const statusOptions = [['', 'ทุกสถานะ']]
+      .concat((d.statusList || []).map(s => [s.key, s.label]))
+      .map(([v, l]) => `<option value="${H.esc(v)}">${H.esc(l)}</option>`).join('');
+
+    return `
+      <div class="card">
+        <div class="card-head">
+          <h2>${H.esc(d.title || 'รายการคำขอ')}</h2>
+          <div class="card-actions">
+            <select id="filterStatus" class="input input-sm">${statusOptions}</select>
+            <a href="#/request/new" class="btn btn-primary btn-sm">+ สร้างคำขอใหม่</a>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table table-hover" id="requestTable">
+            <thead><tr><th>เลขที่</th><th>ผู้ขอ</th><th>หน่วยงาน</th><th>วัตถุประสงค์</th><th>เริ่ม</th><th>สิ้นสุด</th><th>ผู้โดยสาร</th><th>สถานะ</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  };
+
+  /* ========================================================================
+   *  REQUEST CREATE FORM
+   * ====================================================================== */
+  Views.requestCreate = function (d) {
+    const me = d.me || {};
+    const vehicleTypes = (d.vehicleTypes || []).map(v => `<option value="${H.esc(v.key)}">${H.esc(v.label)}</option>`).join('');
+    return `
+      <div class="card">
+        <div class="card-head"><h2>สร้างคำขอใช้รถ</h2></div>
+        <form id="requestForm" class="form-grid" onsubmit="return false">
+          <div class="form-row">
+            <label class="field"><span class="field-label">ผู้ขอ</span>
+              <input type="text" value="${H.esc(me.full_name || '')}" disabled></label>
+            <label class="field"><span class="field-label">หน่วยงาน</span>
+              <input type="text" value="${H.esc(me.department || '')}" disabled></label>
+          </div>
+
+          <label class="field"><span class="field-label">วัตถุประสงค์การใช้รถ <span class="req">*</span></span>
+            <input type="text" name="purpose" required maxlength="200" placeholder="เช่น ไปประชุมที่กระทรวงศึกษาธิการ"></label>
+
+          <label class="field"><span class="field-label">รายละเอียดเพิ่มเติม</span>
+            <textarea name="description" rows="3" maxlength="1000" placeholder="รายละเอียดภารกิจ / หมายเหตุ"></textarea></label>
+
+          <div class="form-row">
+            <label class="field"><span class="field-label">วันที่เริ่ม <span class="req">*</span></span>
+              <input type="date" name="start_date" required></label>
+            <label class="field"><span class="field-label">เวลาเริ่ม <span class="req">*</span></span>
+              <input type="time" name="start_time" required value="08:00"></label>
+          </div>
+
+          <div class="form-row">
+            <label class="field"><span class="field-label">วันที่สิ้นสุด <span class="req">*</span></span>
+              <input type="date" name="end_date" required></label>
+            <label class="field"><span class="field-label">เวลาสิ้นสุด <span class="req">*</span></span>
+              <input type="time" name="end_time" required value="17:00"></label>
+          </div>
+
+          <div class="form-row">
+            <label class="field"><span class="field-label">ต้นทาง <span class="req">*</span></span>
+              <input type="text" name="origin" required maxlength="200" placeholder="จุดเริ่มต้น"></label>
+            <label class="field"><span class="field-label">ปลายทาง <span class="req">*</span></span>
+              <input type="text" name="destination" required maxlength="200" placeholder="จุดหมายปลายทาง"></label>
+          </div>
+
+          <div class="form-row">
+            <label class="field"><span class="field-label">จำนวนผู้โดยสาร <span class="req">*</span></span>
+              <input type="number" name="passengers" required min="1" max="50" value="1"></label>
+            <label class="field"><span class="field-label">ประเภทรถที่ต้องการ</span>
+              <select name="vehicle_type_pref"><option value="">ไม่ระบุ</option>${vehicleTypes}</select></label>
+          </div>
+
+          <!-- Availability preview — updates after dates + passengers filled -->
+          <div class="avail-preview" id="availPreview">
+            <div class="avail-empty">
+              <i class="fa-solid fa-circle-info"></i>
+              <span>กรอก <strong>วันที่/เวลา</strong> และ <strong>จำนวนผู้โดยสาร</strong> เพื่อดูรถที่ว่าง</span>
+            </div>
+          </div>
+
+          <label class="field"><span class="field-label">ผู้ติดต่อ / เบอร์โทร</span>
+            <input type="text" name="contact" maxlength="100" placeholder="ชื่อ / เบอร์โทรศัพท์" value="${H.esc(me.phone || '')}"></label>
+
+          <div class="form-actions">
+            <button type="button" class="btn btn-ghost" onclick="history.back()">ยกเลิก</button>
+            <button type="button" id="submitRequest" class="btn btn-primary">ส่งคำขอ</button>
+          </div>
+        </form>
+      </div>
+    `;
+  };
+
+  // Render availability preview HTML from Vehicle_availabilityCheck result
+  Views.availPreview = function (state) {
+    if (state.status === 'empty') {
+      return `<div class="avail-empty">
+        <i class="fa-solid fa-circle-info"></i>
+        <span>กรอก <strong>วันที่/เวลา</strong> และ <strong>จำนวนผู้โดยสาร</strong> เพื่อดูรถที่ว่าง</span>
+      </div>`;
+    }
+    if (state.status === 'loading') {
+      return `<div class="avail-empty"><i class="fa-solid fa-spinner fa-spin"></i><span>กำลังตรวจสอบสถานะรถ…</span></div>`;
+    }
+    if (state.status === 'error') {
+      return `<div class="avail-empty avail-err"><i class="fa-solid fa-triangle-exclamation"></i><span>${H.esc(state.message || 'ตรวจสอบไม่ได้')}</span></div>`;
+    }
+    const items = state.items || [];
+    if (!items.length) {
+      return `<div class="avail-empty"><i class="fa-solid fa-ban"></i><span>ไม่พบรถในระบบ</span></div>`;
+    }
+
+    const typePref = state.typePref || '';
+    // Apply type filter for display (soft filter — ผู้ใช้ยังเห็นทุกคัน แต่ไฮไลต์ตรงประเภทที่เลือก)
+    const available = items.filter(v => v.available);
+    const busy      = items.filter(v => !v.available);
+    const matchType = (v) => !typePref || v.type_key === typePref;
+
+    const card = (v) => {
+      const avail = !!v.available;
+      const reasons = (v.reasons || []).map(r =>
+        `<span class="avail-reason-tag reason-${r.code}">
+          <i class="fa-solid fa-${r.code === 'conflict' ? 'clock' : r.code === 'seats' ? 'users' : r.code === 'maintenance' ? 'screwdriver-wrench' : 'ban'}"></i>
+          ${H.esc(r.label)}
+         </span>`).join('');
+      const conflictsHtml = (v.conflicts || []).map(c => `
+        <div class="avail-conflict-line">
+          <i class="fa-regular fa-clock"></i>
+          <span>${H.datetime(c.start_iso)} — ${H.datetime(c.end_iso)}</span>
+          <code>${H.esc(c.request_no)}</code>
+        </div>`).join('');
+      const isMatch = matchType(v);
+      return `
+        <div class="avail-card ${avail ? 'is-avail' : 'is-busy'} ${isMatch ? 'is-match' : ''}">
+          <div class="avail-card-head">
+            <div class="avail-card-ico ${avail ? 'grad-emerald' : 'grad-slate'}"><i class="fa-solid fa-car-side"></i></div>
+            <div class="avail-card-title">
+              <div class="avail-card-plate">${H.esc(v.plate)}</div>
+              <div class="avail-card-sub">${H.esc(v.brand)} ${H.esc(v.model)} · <i class="fa-solid fa-users"></i> ${H.num(v.seats)} ที่นั่ง · ${H.esc(v.type || v.type_key || '')}</div>
+            </div>
+            <div class="avail-card-status ${avail ? 'is-avail' : 'is-busy'}">
+              <i class="fa-solid fa-${avail ? 'circle-check' : 'circle-xmark'}"></i>
+              ${avail ? 'ว่าง' : 'ไม่ว่าง'}
+            </div>
+          </div>
+          ${!avail && reasons ? `<div class="avail-card-reasons">${reasons}</div>` : ''}
+          ${conflictsHtml ? `<div class="avail-card-conflicts">${conflictsHtml}</div>` : ''}
+        </div>`;
+    };
+
+    return `
+      <div class="avail-head">
+        <div class="avail-head-title">
+          <i class="fa-solid fa-magnifying-glass-chart"></i>
+          <span><strong>ตรวจสถานะรถ</strong> ณ ช่วงเวลาที่เลือก</span>
+        </div>
+        <div class="avail-head-stats">
+          <span class="avail-chip avail-chip-ok"><i class="fa-solid fa-circle-check"></i> ว่าง ${H.num(available.length)}</span>
+          <span class="avail-chip avail-chip-no"><i class="fa-solid fa-circle-xmark"></i> ไม่ว่าง ${H.num(busy.length)}</span>
+        </div>
+      </div>
+      <div class="avail-grid">
+        ${[...available, ...busy].map(card).join('')}
+      </div>
+    `;
+  };
+
+  /* ========================================================================
+   *  REQUEST DETAIL VIEW
+   * ====================================================================== */
+  Views.requestDetail = function (d) {
+    const r = d.request || {};
+    const v = d.vehicle || null;
+    const dr = d.driver || null;
+    const t = d.trip || null;
+    const history = d.history || [];
+
+    const timeline = history.map(h => `
+      <div class="timeline-item">
+        <div class="timeline-dot"></div>
+        <div class="timeline-body">
+          <div class="timeline-head"><strong>${H.esc(h.action_label || h.action)}</strong> · ${H.esc(h.actor_name || '')}</div>
+          <div class="timeline-meta">${H.datetime(h.created_at)} · ระดับ ${H.esc(h.level || '-')}</div>
+          ${h.remark ? `<div class="timeline-remark">${H.esc(h.remark)}</div>` : ''}
+        </div>
+      </div>`).join('') || `<div class="muted">ไม่มีประวัติการดำเนินการ</div>`;
+
+    const myRole = (d.me || {}).role || '';
+    const isOwner = (d.me || {}).id === r.requester_id;
+    const canApproveL1 = (myRole === 'approver' || myRole === 'admin') && r.status === 'pending';
+    const canAssignL2 = (myRole === 'manager' || myRole === 'admin') && r.status === 'approved_l1';
+    const canCancel = isOwner && ['pending', 'approved_l1'].indexOf(r.status) >= 0;
+    const canEdit = isOwner && r.status === 'pending';
+    const canStartTrip = myRole === 'driver' && r.status === 'approved' && dr && dr.user_id === (d.me || {}).id;
+    const canCompleteTrip = myRole === 'driver' && r.status === 'in_progress' && dr && dr.user_id === (d.me || {}).id;
+
+    const actions = [];
+    if (canEdit) actions.push(`<button class="btn btn-ghost" data-act="edit"><i class="fa-solid fa-pen-to-square"></i> แก้ไข</button>`);
+    if (canCancel) actions.push(`<button class="btn btn-danger" data-act="cancel"><i class="fa-solid fa-trash-can"></i> ยกเลิกคำขอ</button>`);
+    if (canApproveL1) {
+      actions.push(`<button class="btn btn-success" data-act="approveL1"><i class="fa-solid fa-check"></i> อนุมัติ (หัวหน้า)</button>`);
+      actions.push(`<button class="btn btn-danger"  data-act="reject"><i class="fa-solid fa-xmark"></i> ไม่อนุมัติ</button>`);
+    }
+    if (canAssignL2) {
+      actions.push(`<button class="btn btn-accent" data-act="assign"><i class="fa-solid fa-car-side"></i> จัดรถ/คนขับ</button>`);
+      actions.push(`<button class="btn btn-danger" data-act="reject"><i class="fa-solid fa-xmark"></i> ไม่อนุมัติ</button>`);
+    }
+    if (canStartTrip)    actions.push(`<button class="btn btn-primary" data-act="tripStart"><i class="fa-solid fa-play"></i> เริ่มเดินทาง</button>`);
+    if (canCompleteTrip) actions.push(`<button class="btn btn-success" data-act="tripComplete"><i class="fa-solid fa-flag-checkered"></i> สิ้นสุดการเดินทาง</button>`);
+
+    return `
+      <div class="detail-grid">
+
+        <div class="card">
+          <div class="card-head">
+            <h2>คำขอเลขที่ <code>${H.esc(r.request_no)}</code></h2>
+            <div>${H.statusBadge(r.status, r.status_label, r.status_color)}</div>
+          </div>
+          <div class="kv">
+            <div><dt>ผู้ขอ</dt><dd>${H.esc(r.requester_name)}</dd></div>
+            <div><dt>หน่วยงาน</dt><dd>${H.esc(r.department)}</dd></div>
+            <div><dt>วัตถุประสงค์</dt><dd>${H.esc(r.purpose)}</dd></div>
+            <div><dt>รายละเอียด</dt><dd>${H.esc(r.description) || '-'}</dd></div>
+            <div><dt>เริ่ม</dt><dd>${H.datetime(r.start_datetime)}</dd></div>
+            <div><dt>สิ้นสุด</dt><dd>${H.datetime(r.end_datetime)}</dd></div>
+            <div><dt>ต้นทาง</dt><dd>${H.esc(r.origin)}</dd></div>
+            <div><dt>ปลายทาง</dt><dd>${H.esc(r.destination)}</dd></div>
+            <div><dt>จำนวนผู้โดยสาร</dt><dd>${H.num(r.passengers)} คน</dd></div>
+            <div><dt>ประเภทรถที่ต้องการ</dt><dd>${H.esc(r.vehicle_type_pref) || '-'}</dd></div>
+            <div><dt>ผู้ติดต่อ</dt><dd>${H.esc(r.contact) || '-'}</dd></div>
+            <div><dt>สร้างเมื่อ</dt><dd>${H.datetime(r.created_at)}</dd></div>
+          </div>
+          ${actions.length ? `<div class="card-actions-bar">${actions.join('')}</div>` : ''}
+        </div>
+
+        ${v ? `
+        <div class="card">
+          <div class="card-head"><h3>รถที่จัด</h3></div>
+          <div class="kv">
+            <div><dt>ทะเบียน</dt><dd><strong>${H.esc(v.plate)}</strong></dd></div>
+            <div><dt>ยี่ห้อ/รุ่น</dt><dd>${H.esc(v.brand)} ${H.esc(v.model)}</dd></div>
+            <div><dt>ประเภท</dt><dd>${H.esc(v.type)}</dd></div>
+            <div><dt>ที่นั่ง</dt><dd>${H.num(v.seats)}</dd></div>
+            <div><dt>เลขไมล์ปัจจุบัน</dt><dd>${H.num(v.current_mileage)} กม.</dd></div>
+          </div>
+        </div>` : ''}
+
+        ${dr ? `
+        <div class="card">
+          <div class="card-head"><h3>คนขับ</h3></div>
+          <div class="kv">
+            <div><dt>ชื่อ</dt><dd><strong>${H.esc(dr.full_name)}</strong></dd></div>
+            <div><dt>เบอร์โทร</dt><dd>${H.esc(dr.phone) || '-'}</dd></div>
+            <div><dt>เลขที่ใบขับขี่</dt><dd>${H.esc(dr.license_no) || '-'}</dd></div>
+          </div>
+        </div>` : ''}
+
+        ${t ? `
+        <div class="card">
+          <div class="card-head"><h3>บันทึกการเดินทาง</h3></div>
+          <div class="kv">
+            <div><dt>ไมล์เริ่มต้น</dt><dd>${H.num(t.start_mileage)} กม.</dd></div>
+            <div><dt>เวลาออก</dt><dd>${H.datetime(t.start_time)}</dd></div>
+            <div><dt>ไมล์สิ้นสุด</dt><dd>${t.end_mileage ? H.num(t.end_mileage) + ' กม.' : '-'}</dd></div>
+            <div><dt>เวลากลับ</dt><dd>${H.datetime(t.end_time)}</dd></div>
+            <div><dt>ระยะทาง</dt><dd>${t.distance ? H.num(t.distance) + ' กม.' : '-'}</dd></div>
+            <div><dt>หมายเหตุ</dt><dd>${H.esc(t.remark) || '-'}</dd></div>
+          </div>
+        </div>` : ''}
+
+        <div class="card">
+          <div class="card-head"><h3>ประวัติการดำเนินการ</h3></div>
+          <div class="timeline">${timeline}</div>
+        </div>
+      </div>
+    `;
+  };
+
+  /* ========================================================================
+   *  APPROVAL INBOX
+   * ====================================================================== */
+  Views.approvalInbox = function (d) {
+    const rows = (d.items || []).map(r => `
+      <tr data-id="${H.esc(r.id)}" class="clickable">
+        <td><code>${H.esc(r.request_no)}</code></td>
+        <td>${H.esc(r.requester_name)}</td>
+        <td>${H.esc(r.department)}</td>
+        <td>${H.esc(r.purpose).slice(0, 40)}</td>
+        <td>${H.datetime(r.start_datetime)}</td>
+        <td>${H.datetime(r.end_datetime)}</td>
+        <td>${H.num(r.passengers)}</td>
+        <td>${H.statusBadge(r.status, r.status_label, r.status_color)}</td>
+      </tr>`).join('') || `<tr><td colspan="8">${H.esc('ไม่มีคำขอรออนุมัติ')}</td></tr>`;
+
+    return `
+      <div class="card">
+        <div class="card-head">
+          <h2>คิวอนุมัติของฉัน</h2>
+          <span class="muted">${H.esc(d.roleHint || '')}</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table table-hover" id="approvalTable">
+            <thead><tr><th>เลขที่</th><th>ผู้ขอ</th><th>หน่วยงาน</th><th>วัตถุประสงค์</th><th>เริ่ม</th><th>สิ้นสุด</th><th>ผู้โดยสาร</th><th>สถานะ</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  };
+
+  /* ========================================================================
+   *  CALENDAR
+   * ====================================================================== */
+  Views.calendar = function (d) {
+    const y = d.year, m = d.month; // 1-based month
+    const events    = d.events    || [];
+    const allEvents = d.allEvents || events;
+    const filter    = d.filter    || '';
+    const view      = d.view      || 'month';
+    const first = new Date(y, m - 1, 1);
+    const start = new Date(first);
+    start.setDate(start.getDate() - first.getDay()); // back to Sunday
+    const monthLabel = first.toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
+
+    const THAI_MONTHS       = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    const THAI_MONTHS_SHORT = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+    const DAY_SHORT         = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+    const DAY_FULL          = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+    const pad = n => String(n).padStart(2, '0');
+    const keyOf = dt => dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate());
+    const fmtTime = dt => pad(dt.getHours()) + ':' + pad(dt.getMinutes());
+
+    const today = new Date();
+    const todayK = keyOf(today);
+    const isCurrentMonth = today.getFullYear() === y && today.getMonth() === m - 1;
+
+    // group events by yyyy-mm-dd (use filtered events for grid)
+    const byDay = {};
+    events.forEach(ev => {
+      if (!ev.start_datetime) return;
+      const s = new Date(ev.start_datetime);
+      const e = ev.end_datetime ? new Date(ev.end_datetime) : s;
+      if (isNaN(s.getTime())) return;
+      for (let t = new Date(s.getFullYear(), s.getMonth(), s.getDate()); t <= e; t.setDate(t.getDate() + 1)) {
+        (byDay[keyOf(t)] = byDay[keyOf(t)] || []).push(ev);
+      }
+    });
+
+    // status count for filter chips (from ALL events, not filtered)
+    const counts = { all: allEvents.length, pending: 0, approved: 0, in_progress: 0, completed: 0, rejected: 0, cancelled: 0 };
+    allEvents.forEach(ev => {
+      const s = ev.status;
+      if (s === 'pending' || s === 'approved_l1') counts.pending++;
+      else if (counts[s] != null) counts[s]++;
+    });
+
+    // month summary (from filtered events)
+    const vehicleSet = new Set();
+    const driverSet  = new Set();
+    let totalPassengers = 0;
+    events.forEach(ev => {
+      if (ev.vehicle_id) vehicleSet.add(ev.vehicle_id);
+      if (ev.driver_id)  driverSet.add(ev.driver_id);
+      totalPassengers += Number(ev.passengers || ev.passengers_count || 0) || 0;
+    });
+
+    // weekday columns: days-in-month counts (for mini bar chart)
+    const monthDays = new Date(y, m, 0).getDate();
+    const byDow = [0, 0, 0, 0, 0, 0, 0]; // Sun..Sat
+    events.forEach(ev => {
+      if (!ev.start_datetime) return;
+      const s = new Date(ev.start_datetime);
+      if (!isNaN(s.getTime())) byDow[s.getDay()]++;
+    });
+    const maxDow = Math.max(1, ...byDow);
+
+    // ----- Month-grid HTML -----
+    const weeks = [];
+    const cursor = new Date(start);
+    for (let w = 0; w < 6; w++) {
+      const days = [];
+      for (let i = 0; i < 7; i++) {
+        const inMonth = cursor.getMonth() === m - 1;
+        const k = keyOf(cursor);
+        const dayEvents = byDay[k] || [];
+        const evs = dayEvents.slice(0, 3);
+        const more = dayEvents.length - evs.length;
+        const isToday  = (k === todayK);
+        const isWeekend = (cursor.getDay() === 0 || cursor.getDay() === 6);
+        const heatLvl   = Math.min(3, dayEvents.length);
+        const accentCol = dayEvents.length ? (dayEvents[0].status_color || '#64748b') : '';
+        const classes = [
+          'cal-day',
+          !inMonth && 'cal-day-out',
+          isToday && 'cal-day-today',
+          isWeekend && 'cal-day-weekend',
+          dayEvents.length && 'cal-day-has',
+          heatLvl && ('cal-day-heat-' + heatLvl)
+        ].filter(Boolean).join(' ');
+
+        days.push(`
+          <div class="${classes}" ${accentCol ? `style="--cal-day-accent:${accentCol}"` : ''}>
+            <div class="cal-day-head">
+              <span class="cal-day-num">${cursor.getDate()}</span>
+              ${isToday ? `<span class="cal-day-today-badge">วันนี้</span>` : ''}
+              ${dayEvents.length ? `<span class="cal-day-count">${dayEvents.length}</span>` : ''}
+            </div>
+            <div class="cal-day-events">
+              ${evs.map(ev => {
+                const sdt = ev.start_datetime ? new Date(ev.start_datetime) : null;
+                const tm = sdt && !isNaN(sdt.getTime()) ? fmtTime(sdt) : '';
+                return `<a class="cal-ev clickable"
+                           style="--ev-color:${ev.status_color || '#64748b'}"
+                           data-id="${H.esc(ev.id)}"
+                           title="${H.esc(ev.request_no)} — ${H.esc(ev.purpose)}${ev.requester_name ? ' · ' + H.esc(ev.requester_name) : ''}">
+                  <span class="cal-ev-dot"></span>
+                  ${tm ? `<span class="cal-ev-time">${tm}</span>` : ''}
+                  <span class="cal-ev-text">${H.esc(ev.purpose || ev.request_no).slice(0, 22)}</span>
+                </a>`;
+              }).join('')}
+              ${more > 0 ? `<div class="cal-more">+${more} อื่น ๆ</div>` : ''}
+            </div>
+          </div>`);
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      weeks.push(`<div class="cal-week">${days.join('')}</div>`);
+    }
+    const monthGrid = `
+      <div class="cal">
+        <div class="cal-head-row">
+          ${DAY_SHORT.map((d, i) => `<div class="cal-head-cell ${i === 0 || i === 6 ? 'is-weekend' : ''}">${d}</div>`).join('')}
+        </div>
+        ${weeks.join('')}
+      </div>`;
+
+    // ----- List view HTML -----
+    const sorted = events.slice().sort((a, b) => String(a.start_datetime || '').localeCompare(String(b.start_datetime || '')));
+    let listHtml;
+    if (!sorted.length) {
+      listHtml = H.empty('ไม่มีรายการในเดือนนี้ ลองเปลี่ยนเดือนหรือล้างตัวกรอง');
+    } else {
+      // group by day
+      const groups = {};
+      sorted.forEach(ev => {
+        const s = ev.start_datetime ? new Date(ev.start_datetime) : null;
+        if (!s || isNaN(s.getTime())) return;
+        const k = keyOf(s);
+        (groups[k] = groups[k] || { date: s, items: [] }).items.push(ev);
+      });
+      const groupHtml = Object.keys(groups).sort().map(k => {
+        const g = groups[k];
+        const dt = g.date;
+        const dd = dt.getDate();
+        const mo = THAI_MONTHS_SHORT[dt.getMonth()];
+        const dw = DAY_FULL[dt.getDay()];
+        const isTodayG = (k === todayK);
+        return `
+          <div class="cal-list-group ${isTodayG ? 'is-today' : ''}">
+            <div class="cal-list-date">
+              <div class="cal-list-dd">${dd}</div>
+              <div class="cal-list-mm">${mo}</div>
+              <div class="cal-list-dw">${dw}</div>
+              ${isTodayG ? `<div class="cal-list-today"><i class="fa-solid fa-circle"></i> วันนี้</div>` : ''}
+            </div>
+            <div class="cal-list-items">
+              ${g.items.map(ev => {
+                const sdt = new Date(ev.start_datetime);
+                const edt = ev.end_datetime ? new Date(ev.end_datetime) : null;
+                const tm = fmtTime(sdt) + (edt && !isNaN(edt.getTime()) ? ' — ' + fmtTime(edt) : '');
+                return `
+                  <a class="cal-list-item clickable" data-id="${H.esc(ev.id)}" style="--ev-color:${ev.status_color || '#64748b'}">
+                    <div class="cal-list-stripe"></div>
+                    <div class="cal-list-main">
+                      <div class="cal-list-head-row">
+                        <code class="cal-list-no">${H.esc(ev.request_no)}</code>
+                        <span class="badge" style="background:${ev.status_color || '#64748b'};color:#fff">${H.esc(ev.status_label || ev.status)}</span>
+                      </div>
+                      <div class="cal-list-purpose">${H.esc(ev.purpose || '-')}</div>
+                      <div class="cal-list-meta">
+                        <span><i class="fa-solid fa-user"></i> ${H.esc(ev.requester_name || '-')}</span>
+                        <span><i class="fa-regular fa-clock"></i> ${tm}</span>
+                        ${ev.vehicle_plate ? `<span><i class="fa-solid fa-car-side"></i> ${H.esc(ev.vehicle_plate)}</span>` : ''}
+                        ${ev.driver_name ? `<span><i class="fa-solid fa-id-card"></i> ${H.esc(ev.driver_name)}</span>` : ''}
+                        ${ev.destination ? `<span><i class="fa-solid fa-location-dot"></i> ${H.esc(String(ev.destination).slice(0, 40))}</span>` : ''}
+                      </div>
+                    </div>
+                    <div class="cal-list-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+                  </a>`;
+              }).join('')}
+            </div>
+          </div>`;
+      }).join('');
+      listHtml = `<div class="cal-list">${groupHtml}</div>`;
+    }
+
+    // ----- Month/Year selectors -----
+    const monthOptions = THAI_MONTHS.map((nm, i) => {
+      const mm = i + 1;
+      return `<option value="${mm}" ${mm === m ? 'selected' : ''}>${nm}</option>`;
+    }).join('');
+    const yearOptions = (() => {
+      const arr = [];
+      for (let yy = y - 5; yy <= y + 5; yy++) {
+        arr.push(`<option value="${yy}" ${yy === y ? 'selected' : ''}>พ.ศ. ${yy + 543}</option>`);
+      }
+      return arr.join('');
+    })();
+
+    // ----- Status filter chips -----
+    const chipDef = [
+      ['',            'ทั้งหมด',      '',        counts.all],
+      ['pending',     'รออนุมัติ',    '#f59e0b', counts.pending],
+      ['approved',    'อนุมัติแล้ว',  '#10b981', counts.approved],
+      ['in_progress', 'กำลังเดินทาง', '#8b5cf6', counts.in_progress],
+      ['completed',   'เสร็จสิ้น',    '#64748b', counts.completed],
+      ['rejected',    'ไม่อนุมัติ',   '#ef4444', counts.rejected],
+      ['cancelled',   'ยกเลิก',       '#9ca3af', counts.cancelled]
+    ];
+    const chipsHtml = chipDef.map(([val, label, color, cnt]) => `
+      <button type="button"
+              class="cal-filter-chip ${filter === val ? 'active' : ''}"
+              data-cal-filter="${val}"
+              ${color ? `style="--chip-dot:${color}"` : ''}>
+        ${color ? '<span class="cal-chip-dot"></span>' : '<i class="fa-solid fa-layer-group" style="opacity:.6;font-size:11px"></i>'}
+        <span>${H.esc(label)}</span>
+        <span class="cal-chip-count">${cnt}</span>
+      </button>`).join('');
+
+    // ----- Weekday mini chart (inline sparkline-like bars) -----
+    const dowChart = byDow.map((v, i) => {
+      const h = maxDow ? Math.round((v / maxDow) * 100) : 0;
+      return `<div class="cal-dow-col" title="${DAY_FULL[i]}: ${v} รายการ">
+        <div class="cal-dow-bar" style="height:${h}%;background:var(--theme-accent)"></div>
+        <div class="cal-dow-num">${v}</div>
+        <div class="cal-dow-lb">${DAY_SHORT[i]}</div>
+      </div>`;
+    }).join('');
+
+    // ----- Compose -----
+    return `
+      <div class="cal-page" id="calPage">
+        <!-- Premium hero -->
+        <section class="cal-hero">
+          <div class="cal-hero-decor"></div>
+          <div class="cal-hero-inner">
+            <div class="cal-hero-title">
+              <div class="cal-hero-icon"><i class="fa-solid fa-calendar-days"></i></div>
+              <div>
+                <h1 class="cal-hero-h">ปฏิทินการใช้รถ</h1>
+                <div class="cal-hero-sub">
+                  <strong>${H.esc(monthLabel)}</strong>
+                  · <i class="fa-regular fa-calendar-check"></i> ${H.num(events.length)} รายการ
+                  ${isCurrentMonth ? '· <span class="cal-hero-pill"><i class="fa-solid fa-circle" style="color:#a7f3d0"></i> เดือนปัจจุบัน</span>' : ''}
+                </div>
+              </div>
+            </div>
+            <div class="cal-hero-actions">
+              <div class="cal-nav">
+                <button class="btn-app btn-app-ghost" data-cal-nav="-1" title="เดือนก่อน"><i class="fa-solid fa-chevron-left"></i></button>
+                <button class="btn-app btn-app-ghost" id="calToday" title="กลับเดือนปัจจุบัน"><i class="fa-solid fa-location-crosshairs"></i><span class="hide-sm">วันนี้</span></button>
+                <button class="btn-app btn-app-ghost" data-cal-nav="+1" title="เดือนถัดไป"><i class="fa-solid fa-chevron-right"></i></button>
+              </div>
+              <button class="btn-app btn-app-primary" id="btnPrintCal">
+                <i class="fa-solid fa-print"></i><span class="hide-sm">พิมพ์ / PDF</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Toolbar: jump + view toggle + filter chips -->
+        <section class="cal-toolbar">
+          <div class="cal-jump">
+            <label class="cal-jump-field">
+              <span><i class="fa-regular fa-calendar"></i> เดือน</span>
+              <select id="calMonthSel" class="cal-select">${monthOptions}</select>
+            </label>
+            <label class="cal-jump-field">
+              <span><i class="fa-regular fa-calendar"></i> ปี</span>
+              <select id="calYearSel" class="cal-select">${yearOptions}</select>
+            </label>
+          </div>
+
+          <div class="cal-view-switch" role="tablist">
+            <button class="cal-view-btn ${view === 'month' ? 'active' : ''}" data-cal-view="month">
+              <i class="fa-solid fa-table-cells"></i><span>เดือน</span>
+            </button>
+            <button class="cal-view-btn ${view === 'list' ? 'active' : ''}" data-cal-view="list">
+              <i class="fa-solid fa-list"></i><span>รายการ</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="cal-filter-chips">${chipsHtml}</section>
+
+        <!-- Summary stat cards -->
+        <section class="cal-stats">
+          <div class="cal-stat">
+            <div class="cal-stat-ico grad-emerald"><i class="fa-solid fa-calendar-check"></i></div>
+            <div class="cal-stat-body">
+              <div class="cal-stat-num">${H.num(events.length)}</div>
+              <div class="cal-stat-lb">รายการในเดือนนี้</div>
+            </div>
+          </div>
+          <div class="cal-stat">
+            <div class="cal-stat-ico grad-sky"><i class="fa-solid fa-car-side"></i></div>
+            <div class="cal-stat-body">
+              <div class="cal-stat-num">${H.num(vehicleSet.size)}</div>
+              <div class="cal-stat-lb">รถที่ถูกใช้</div>
+            </div>
+          </div>
+          <div class="cal-stat">
+            <div class="cal-stat-ico grad-violet"><i class="fa-solid fa-id-card"></i></div>
+            <div class="cal-stat-body">
+              <div class="cal-stat-num">${H.num(driverSet.size)}</div>
+              <div class="cal-stat-lb">คนขับที่มีภารกิจ</div>
+            </div>
+          </div>
+          <div class="cal-stat">
+            <div class="cal-stat-ico grad-amber"><i class="fa-solid fa-users"></i></div>
+            <div class="cal-stat-body">
+              <div class="cal-stat-num">${H.num(totalPassengers)}</div>
+              <div class="cal-stat-lb">ผู้โดยสารรวม</div>
+            </div>
+          </div>
+          <div class="cal-stat cal-stat-chart">
+            <div class="cal-stat-body">
+              <div class="cal-stat-lb" style="margin-bottom:6px"><i class="fa-solid fa-chart-column"></i> ตามวันในสัปดาห์</div>
+              <div class="cal-dow">${dowChart}</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Grid / List -->
+        <section class="cal-main ${view === 'list' ? 'is-list' : 'is-month'}">
+          ${view === 'month' ? monthGrid : listHtml}
+        </section>
+
+        <!-- Legend -->
+        <section class="cal-legend">
+          <span class="cal-legend-title">สถานะ :</span>
+          <span class="cal-legend-item"><span class="cal-dot" style="background:#f59e0b"></span>รออนุมัติ</span>
+          <span class="cal-legend-item"><span class="cal-dot" style="background:#3b82f6"></span>รอจัดสรร</span>
+          <span class="cal-legend-item"><span class="cal-dot" style="background:#10b981"></span>อนุมัติ</span>
+          <span class="cal-legend-item"><span class="cal-dot" style="background:#8b5cf6"></span>กำลังเดินทาง</span>
+          <span class="cal-legend-item"><span class="cal-dot" style="background:#64748b"></span>เสร็จสิ้น</span>
+          <span class="cal-legend-item"><span class="cal-dot" style="background:#ef4444"></span>ไม่อนุมัติ</span>
+          <span class="cal-legend-item"><span class="cal-dot" style="background:#9ca3af"></span>ยกเลิก</span>
+        </section>
+      </div>
+    `;
+  };
+
+  /* ========================================================================
+   *  VEHICLES
+   * ====================================================================== */
+  Views.vehicles = function (d) {
+    const items = d.items || [];
+    const rows = items.map(v => `
+      <tr>
+        <td>
+          <div class="cell-primary">
+            <div class="cell-ico-round grad-emerald"><i class="fa-solid fa-car-side"></i></div>
+            <div>
+              <div class="cell-main">${H.esc(v.plate)}</div>
+              <div class="cell-sub">${H.esc(v.brand)} ${H.esc(v.model)}</div>
+            </div>
+          </div>
+        </td>
+        <td>${H.esc(v.type)} · ${H.num(v.seats)} ที่นั่ง</td>
+        <td>${H.esc(v.year) || '-'}</td>
+        <td><span class="cell-num">${H.num(v.current_mileage)}</span> <small class="muted">กม.</small></td>
+        <td>${H.statusBadge(v.status, v.status_label, v.status_color)}</td>
+        <td class="actions">
+          <button class="btn btn-ghost btn-sm"  data-act="edit"   data-id="${H.esc(v.id)}" title="แก้ไข"><i class="fa-solid fa-pen-to-square"></i><span class="hide-xs">แก้ไข</span></button>
+          <button class="btn btn-danger btn-sm" data-act="delete" data-id="${H.esc(v.id)}" title="ลบ"><i class="fa-solid fa-trash-can"></i><span class="hide-xs">ลบ</span></button>
+        </td>
+      </tr>`).join('') || `<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">ยังไม่มีข้อมูลรถ</td></tr>`;
+
+    // quick stats
+    const byStatus = items.reduce((a, v) => { a[v.status] = (a[v.status] || 0) + 1; return a; }, {});
+    const stats = [
+      { lb: 'รถทั้งหมด',     val: items.length,                 icon: 'fa-car-side',      grad: 'grad-emerald' },
+      { lb: 'พร้อมใช้งาน',   val: byStatus.available || 0,      icon: 'fa-circle-check',  grad: 'grad-sky' },
+      { lb: 'กำลังใช้งาน',   val: byStatus.in_use || 0,         icon: 'fa-route',         grad: 'grad-violet' },
+      { lb: 'ซ่อมบำรุง',     val: byStatus.maintenance || 0,    icon: 'fa-screwdriver-wrench', grad: 'grad-amber' }
+    ];
+    const statsHtml = stats.map(s => `
+      <div class="mgr-stat">
+        <div class="mgr-stat-ico ${s.grad}"><i class="fa-solid ${s.icon}"></i></div>
+        <div><div class="mgr-stat-num">${H.num(s.val)}</div><div class="mgr-stat-lb">${H.esc(s.lb)}</div></div>
+      </div>`).join('');
+
+    return `
+      <div class="mgr-page">
+        <section class="mgr-hero">
+          <div class="mgr-hero-decor"></div>
+          <div class="mgr-hero-inner">
+            <div class="mgr-hero-title">
+              <div class="mgr-hero-icon"><i class="fa-solid fa-car-side"></i></div>
+              <div>
+                <h1 class="mgr-hero-h">จัดการยานพาหนะ</h1>
+                <div class="mgr-hero-sub">ทะเบียนรถ · ประเภท · สถานะ · เลขไมล์</div>
+              </div>
+            </div>
+            <div class="mgr-hero-actions">
+              <div class="mgr-search">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="text" id="vehicleSearch" placeholder="ค้นหาทะเบียน / ยี่ห้อ / รุ่น...">
+              </div>
+              <button class="btn-app btn-app-primary" id="btnNewVehicle">
+                <i class="fa-solid fa-plus"></i><span class="hide-sm">เพิ่มรถใหม่</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="mgr-stats">${statsHtml}</section>
+
+        <section class="card mgr-tablecard">
+          <div class="table-wrap">
+            <table class="table table-hover" id="vehicleTable">
+              <thead><tr><th>ทะเบียน / รุ่น</th><th>ประเภท / ที่นั่ง</th><th>ปี</th><th>เลขไมล์</th><th>สถานะ</th><th style="text-align:right">การจัดการ</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    `;
+  };
+
+  Views.vehicleForm = function (d) {
+    const v = d.vehicle || {};
+    const types = (d.types || []).map(t => `<option value="${H.esc(t.key)}" ${v.type_key === t.key || v.type === t.key ? 'selected' : ''}>${H.esc(t.label)}</option>`).join('');
+    const statuses = (d.statuses || []).map(s => `<option value="${H.esc(s.key)}" ${v.status === s.key ? 'selected' : ''}>${H.esc(s.label)}</option>`).join('');
+    return `
+      <form id="vehicleForm" onsubmit="return false">
+        <input type="hidden" name="id" value="${H.esc(v.id || '')}">
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-id-card-clip"></i> ข้อมูลทะเบียน</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-hashtag"></i> ทะเบียนรถ <span class="req">*</span></span>
+              <input type="text" name="plate" required maxlength="20" placeholder="กข 1234 กทม." value="${H.esc(v.plate || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-tags"></i> ประเภทรถ <span class="req">*</span></span>
+              <select name="type" required><option value="">-- เลือกประเภท --</option>${types}</select>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-car"></i> รายละเอียดรถ</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-industry"></i> ยี่ห้อ</span>
+              <input type="text" name="brand" maxlength="50" placeholder="Toyota" value="${H.esc(v.brand || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-car-side"></i> รุ่น</span>
+              <input type="text" name="model" maxlength="50" placeholder="Camry" value="${H.esc(v.model || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-regular fa-calendar"></i> ปีที่ผลิต</span>
+              <input type="number" name="year" min="1990" max="2099" placeholder="2024" value="${H.esc(v.year || '')}">
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-palette"></i> สี</span>
+              <input type="text" name="color" maxlength="30" placeholder="ขาว / ดำ" value="${H.esc(v.color || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-users"></i> ที่นั่ง</span>
+              <input type="number" name="seats" min="1" max="60" value="${H.esc(v.seats || 4)}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-gas-pump"></i> เชื้อเพลิง</span>
+              <input type="text" name="fuel_type" maxlength="30" placeholder="ดีเซล / เบนซิน / NGV" value="${H.esc(v.fuel_type || '')}">
+            </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-gauge"></i> สภาพและสถานะ</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-road"></i> เลขไมล์ปัจจุบัน (กม.)</span>
+              <input type="number" name="current_mileage" min="0" step="1" value="${H.esc(v.current_mileage || 0)}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-signal"></i> สถานะ</span>
+              <select name="status">${statuses}</select>
+            </label>
+          </div>
+          <label class="field">
+            <span class="field-label"><i class="fa-regular fa-note-sticky"></i> หมายเหตุเพิ่มเติม</span>
+            <textarea name="remark" rows="2" maxlength="500" placeholder="บันทึกเพิ่มเติม เช่น ข้อควรระวัง, ประวัติซ่อม">${H.esc(v.remark || '')}</textarea>
+          </label>
+        </div>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  DRIVERS
+   * ====================================================================== */
+  Views.drivers = function (d) {
+    const items = d.items || [];
+    // license expiry warnings
+    const now = new Date();
+    const rows = items.map(dr => {
+      const expDt = dr.license_expiry ? new Date(dr.license_expiry) : null;
+      const expired  = expDt && !isNaN(expDt) && expDt < now;
+      const expiring = expDt && !isNaN(expDt) && !expired && ((expDt - now) / 86400000) <= 90;
+      const expTag = expired ? '<span class="lic-tag expired"><i class="fa-solid fa-triangle-exclamation"></i> หมดอายุ</span>'
+                 : expiring ? '<span class="lic-tag warn"><i class="fa-solid fa-clock"></i> ใกล้หมดอายุ</span>'
+                 : '';
+      return `
+      <tr>
+        <td>
+          <div class="cell-primary">
+            <div class="cell-ico-round grad-sky"><i class="fa-solid fa-id-card"></i></div>
+            <div>
+              <div class="cell-main">${H.esc(dr.full_name)}</div>
+              <div class="cell-sub">${H.esc(dr.phone) || '-'}</div>
+            </div>
+          </div>
+        </td>
+        <td>${H.esc(dr.license_no) || '-'}</td>
+        <td>${H.date(dr.license_expiry)} ${expTag}</td>
+        <td>${H.esc(dr.user_username) || '<span class="muted">ไม่ผูก</span>'}</td>
+        <td>${H.statusBadge(dr.status, dr.status === 'active' ? 'พร้อมใช้งาน' : 'ไม่พร้อม', dr.status === 'active' ? 'var(--success)' : 'var(--muted)')}</td>
+        <td class="actions">
+          <button class="btn btn-ghost btn-sm"  data-act="edit"   data-id="${H.esc(dr.id)}" title="แก้ไข"><i class="fa-solid fa-pen-to-square"></i><span class="hide-xs">แก้ไข</span></button>
+          <button class="btn btn-danger btn-sm" data-act="delete" data-id="${H.esc(dr.id)}" title="ลบ"><i class="fa-solid fa-trash-can"></i><span class="hide-xs">ลบ</span></button>
+        </td>
+      </tr>`;
+    }).join('') || `<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">ยังไม่มีคนขับ</td></tr>`;
+
+    const active = items.filter(d => d.status === 'active').length;
+    const expired = items.filter(d => {
+      const e = d.license_expiry ? new Date(d.license_expiry) : null;
+      return e && !isNaN(e) && e < now;
+    }).length;
+    const linked = items.filter(d => d.user_username).length;
+    const stats = [
+      { lb: 'คนขับทั้งหมด', val: items.length, icon: 'fa-id-card',    grad: 'grad-sky' },
+      { lb: 'พร้อมใช้งาน', val: active,        icon: 'fa-circle-check', grad: 'grad-emerald' },
+      { lb: 'ผูกบัญชีผู้ใช้', val: linked,      icon: 'fa-link',         grad: 'grad-violet' },
+      { lb: 'ใบขับขี่หมดอายุ', val: expired,   icon: 'fa-triangle-exclamation', grad: 'grad-rose' }
+    ];
+    const statsHtml = stats.map(s => `
+      <div class="mgr-stat">
+        <div class="mgr-stat-ico ${s.grad}"><i class="fa-solid ${s.icon}"></i></div>
+        <div><div class="mgr-stat-num">${H.num(s.val)}</div><div class="mgr-stat-lb">${H.esc(s.lb)}</div></div>
+      </div>`).join('');
+
+    return `
+      <div class="mgr-page">
+        <section class="mgr-hero">
+          <div class="mgr-hero-decor"></div>
+          <div class="mgr-hero-inner">
+            <div class="mgr-hero-title">
+              <div class="mgr-hero-icon"><i class="fa-solid fa-id-card"></i></div>
+              <div>
+                <h1 class="mgr-hero-h">จัดการคนขับ</h1>
+                <div class="mgr-hero-sub">ทะเบียนคนขับ · ใบขับขี่ · วันหมดอายุ · ผูกบัญชีผู้ใช้</div>
+              </div>
+            </div>
+            <div class="mgr-hero-actions">
+              <div class="mgr-search">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="text" id="driverSearch" placeholder="ค้นหาชื่อ / เบอร์ / ใบขับขี่...">
+              </div>
+              <button class="btn-app btn-app-primary" id="btnNewDriver">
+                <i class="fa-solid fa-plus"></i><span class="hide-sm">เพิ่มคนขับ</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="mgr-stats">${statsHtml}</section>
+
+        <section class="card mgr-tablecard">
+          <div class="table-wrap">
+            <table class="table table-hover" id="driverTable">
+              <thead><tr><th>ชื่อ / เบอร์โทร</th><th>ใบขับขี่</th><th>วันหมดอายุ</th><th>บัญชีผู้ใช้</th><th>สถานะ</th><th style="text-align:right">การจัดการ</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    `;
+  };
+
+  Views.driverForm = function (d) {
+    const dr = d.driver || {};
+    const users = (d.users || []).map(u => `<option value="${H.esc(u.id)}" ${dr.user_id === u.id ? 'selected' : ''}>${H.esc(u.full_name)} (${H.esc(u.username)})</option>`).join('');
+    const expiryVal = dr.license_expiry ? String(dr.license_expiry).slice(0, 10) : '';
+    return `
+      <form id="driverForm" onsubmit="return false">
+        <input type="hidden" name="id" value="${H.esc(dr.id || '')}">
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-user"></i> ข้อมูลบุคคล</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-id-badge"></i> ชื่อ-นามสกุล <span class="req">*</span></span>
+              <input type="text" name="full_name" required maxlength="100" placeholder="นาย สมชาย ใจดี" value="${H.esc(dr.full_name || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-phone"></i> เบอร์โทรศัพท์</span>
+              <input type="text" name="phone" maxlength="30" placeholder="081-234-5678" value="${H.esc(dr.phone || '')}">
+            </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-id-card"></i> ข้อมูลใบขับขี่</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-hashtag"></i> เลขที่ใบขับขี่</span>
+              <input type="text" name="license_no" maxlength="40" placeholder="1-2345-67890-12-3" value="${H.esc(dr.license_no || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-certificate"></i> ประเภทใบขับขี่</span>
+              <input type="text" name="license_type" maxlength="40" placeholder="รถยนต์ส่วนบุคคล" value="${H.esc(dr.license_type || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-regular fa-calendar-xmark"></i> วันหมดอายุ</span>
+              <input type="date" name="license_expiry" value="${expiryVal}">
+            </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-gear"></i> การใช้งานระบบ</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-link"></i> บัญชีผู้ใช้ (ผูกกับ login)</span>
+              <select name="user_id"><option value="">-- ไม่ผูก --</option>${users}</select>
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-signal"></i> สถานะ</span>
+              <select name="status">
+                <option value="active" ${dr.status === 'active' ? 'selected' : ''}>พร้อมใช้งาน</option>
+                <option value="inactive" ${dr.status === 'inactive' ? 'selected' : ''}>ไม่พร้อมใช้งาน</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span class="field-label"><i class="fa-regular fa-note-sticky"></i> หมายเหตุ</span>
+            <textarea name="remark" rows="2" maxlength="500" placeholder="ประสบการณ์ / ความเชี่ยวชาญ / ข้อจำกัด">${H.esc(dr.remark || '')}</textarea>
+          </label>
+        </div>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  TRIP TASKS (สำหรับคนขับ)
+   * ====================================================================== */
+  Views.tripTasks = function (d) {
+    const rows = (d.items || []).map(r => `
+      <tr data-id="${H.esc(r.id)}" class="clickable">
+        <td><code>${H.esc(r.request_no)}</code></td>
+        <td>${H.esc(r.requester_name)}</td>
+        <td>${H.esc(r.purpose).slice(0, 40)}</td>
+        <td>${H.esc(r.origin)} → ${H.esc(r.destination)}</td>
+        <td>${H.datetime(r.start_datetime)}</td>
+        <td>${H.datetime(r.end_datetime)}</td>
+        <td>${H.statusBadge(r.status, r.status_label, r.status_color)}</td>
+      </tr>`).join('') || `<tr><td colspan="7">${H.esc('ไม่มีงานที่ได้รับมอบหมาย')}</td></tr>`;
+    return `
+      <div class="card">
+        <div class="card-head"><h2>งานขับรถของฉัน</h2></div>
+        <div class="table-wrap">
+          <table class="table table-hover" id="tripTable">
+            <thead><tr><th>เลขที่</th><th>ผู้ขอ</th><th>วัตถุประสงค์</th><th>เส้นทาง</th><th>เริ่ม</th><th>สิ้นสุด</th><th>สถานะ</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  };
+
+  Views.tripStartForm = function (d) {
+    const v = d.vehicle || {};
+    return `
+      <form id="tripStartForm" class="form-grid" onsubmit="return false">
+        <input type="hidden" name="request_id" value="${H.esc(d.request_id || '')}">
+        <div class="muted">รถ: <strong>${H.esc(v.plate || '-')}</strong> · เลขไมล์ล่าสุด: ${H.num(v.current_mileage || 0)} กม.</div>
+        <label class="field"><span class="field-label">เลขไมล์เริ่มต้น (กม.) <span class="req">*</span></span>
+          <input type="number" name="start_mileage" required min="${v.current_mileage || 0}" value="${H.esc(v.current_mileage || 0)}"></label>
+        <label class="field"><span class="field-label">หมายเหตุ</span>
+          <textarea name="remark" rows="2" maxlength="300"></textarea></label>
+      </form>
+    `;
+  };
+
+  Views.tripCompleteForm = function (d) {
+    const t = d.trip || {};
+    return `
+      <form id="tripCompleteForm" class="form-grid" onsubmit="return false">
+        <input type="hidden" name="request_id" value="${H.esc(d.request_id || '')}">
+        <div class="muted">เลขไมล์เริ่มต้น: <strong>${H.num(t.start_mileage || 0)}</strong> กม.</div>
+        <label class="field"><span class="field-label">เลขไมล์สิ้นสุด (กม.) <span class="req">*</span></span>
+          <input type="number" name="end_mileage" required min="${t.start_mileage || 0}" value="${H.esc(t.start_mileage || 0)}"></label>
+        <label class="field"><span class="field-label">หมายเหตุ</span>
+          <textarea name="remark" rows="2" maxlength="300">${H.esc(t.remark || '')}</textarea></label>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  FUEL LOG
+   * ====================================================================== */
+  Views.fuel = function (d) {
+    const items = d.items || [];
+    const rows = items.map(f => `
+      <tr>
+        <td>${H.date(f.fill_date)}</td>
+        <td>
+          <div class="cell-primary">
+            <div class="cell-ico-round grad-amber"><i class="fa-solid fa-gas-pump"></i></div>
+            <div>
+              <div class="cell-main">${H.esc(f.vehicle_plate)}</div>
+              <div class="cell-sub">${H.esc(f.station) || '-'}</div>
+            </div>
+          </div>
+        </td>
+        <td><span class="cell-num">${H.num(f.mileage)}</span> <small class="muted">กม.</small></td>
+        <td><span class="cell-num">${H.money(f.liters)}</span> <small class="muted">ลิตร</small></td>
+        <td><span class="cell-num">${H.money(f.price_per_liter)}</span></td>
+        <td><strong class="cell-num">${H.money(f.total_cost)}</strong> <small class="muted">บาท</small></td>
+        <td class="actions">
+          <button class="btn btn-danger btn-sm" data-act="delete" data-id="${H.esc(f.id)}" title="ลบ"><i class="fa-solid fa-trash-can"></i><span class="hide-xs">ลบ</span></button>
+        </td>
+      </tr>`).join('') || `<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">ยังไม่มีบันทึกเติมน้ำมัน</td></tr>`;
+
+    const totalCost   = items.reduce((a, f) => a + (Number(f.total_cost) || 0), 0);
+    const totalLiters = items.reduce((a, f) => a + (Number(f.liters)     || 0), 0);
+    const avgPrice    = totalLiters > 0 ? totalCost / totalLiters : 0;
+    const stats = [
+      { lb: 'ครั้งที่เติม',  val: items.length,              icon: 'fa-gas-pump',    grad: 'grad-amber',   suffix: '' },
+      { lb: 'ลิตรรวม',       val: totalLiters.toFixed(2),    icon: 'fa-droplet',     grad: 'grad-sky',     suffix: 'ลิตร' },
+      { lb: 'ค่าใช้จ่ายรวม', val: totalCost.toFixed(2),      icon: 'fa-coins',       grad: 'grad-emerald', suffix: 'บาท' },
+      { lb: 'เฉลี่ย',        val: avgPrice.toFixed(2),       icon: 'fa-calculator',  grad: 'grad-violet',  suffix: 'บาท/ลิตร' }
+    ];
+    const statsHtml = stats.map(s => `
+      <div class="mgr-stat">
+        <div class="mgr-stat-ico ${s.grad}"><i class="fa-solid ${s.icon}"></i></div>
+        <div>
+          <div class="mgr-stat-num">${s.val}</div>
+          <div class="mgr-stat-lb">${H.esc(s.lb)} ${s.suffix ? '<span class="muted">· ' + s.suffix + '</span>' : ''}</div>
+        </div>
+      </div>`).join('');
+
+    return `
+      <div class="mgr-page">
+        <section class="mgr-hero">
+          <div class="mgr-hero-decor"></div>
+          <div class="mgr-hero-inner">
+            <div class="mgr-hero-title">
+              <div class="mgr-hero-icon"><i class="fa-solid fa-gas-pump"></i></div>
+              <div>
+                <h1 class="mgr-hero-h">บันทึกเติมน้ำมัน</h1>
+                <div class="mgr-hero-sub">ประวัติการเติมเชื้อเพลิง · สถิติต้นทุน · ต่อรถ</div>
+              </div>
+            </div>
+            <div class="mgr-hero-actions">
+              <button class="btn-app btn-app-primary" id="btnNewFuel">
+                <i class="fa-solid fa-plus"></i><span class="hide-sm">เพิ่มรายการ</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="mgr-stats">${statsHtml}</section>
+
+        <section class="card mgr-tablecard">
+          <div class="table-wrap">
+            <table class="table table-hover" id="fuelTable">
+              <thead><tr><th>วันที่</th><th>รถ / ปั๊ม</th><th>ไมล์</th><th>ลิตร</th><th>บาท/ลิตร</th><th>รวม</th><th style="text-align:right">การจัดการ</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    `;
+  };
+
+  Views.fuelForm = function (d) {
+    const vs = (d.vehicles || []).map(v => `<option value="${H.esc(v.id)}">${H.esc(v.plate)} · ${H.esc(v.brand)} ${H.esc(v.model)}</option>`).join('');
+    const today = new Date().toISOString().slice(0, 10);
+    return `
+      <form id="fuelForm" onsubmit="return false">
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-gas-pump"></i> ข้อมูลการเติม</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-regular fa-calendar"></i> วันที่ <span class="req">*</span></span>
+              <input type="date" name="fill_date" required value="${today}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-car-side"></i> รถ <span class="req">*</span></span>
+              <select name="vehicle_id" required><option value="">-- เลือกรถ --</option>${vs}</select>
+            </label>
+          </div>
+          <label class="field">
+            <span class="field-label"><i class="fa-solid fa-road"></i> เลขไมล์ขณะเติม (กม.)</span>
+            <input type="number" name="mileage" min="0" placeholder="เลขไมล์ปัจจุบัน">
+          </label>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-coins"></i> ปริมาณและราคา</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-droplet"></i> ลิตร <span class="req">*</span></span>
+              <input type="number" name="liters" step="0.01" required min="0" placeholder="0.00">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-baht-sign"></i> บาท/ลิตร <span class="req">*</span></span>
+              <input type="number" name="price_per_liter" step="0.01" required min="0" placeholder="0.00">
+            </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-receipt"></i> อ้างอิง</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-location-dot"></i> ปั๊มน้ำมัน</span>
+              <input type="text" name="station" maxlength="80" placeholder="ปตท. / บางจาก">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-regular fa-file-lines"></i> เลขใบเสร็จ</span>
+              <input type="text" name="receipt_no" maxlength="40">
+            </label>
+          </div>
+          <label class="field">
+            <span class="field-label"><i class="fa-regular fa-note-sticky"></i> หมายเหตุ</span>
+            <textarea name="remark" rows="2" maxlength="300"></textarea>
+          </label>
+        </div>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  MAINTENANCE
+   * ====================================================================== */
+  Views.maint = function (d) {
+    const items = d.items || [];
+    const rows = items.map(m => `
+      <tr>
+        <td>${H.date(m.maint_date)}</td>
+        <td>
+          <div class="cell-primary">
+            <div class="cell-ico-round grad-violet"><i class="fa-solid fa-screwdriver-wrench"></i></div>
+            <div>
+              <div class="cell-main">${H.esc(m.vehicle_plate)}</div>
+              <div class="cell-sub">${H.esc(m.type) || '-'}</div>
+            </div>
+          </div>
+        </td>
+        <td>${H.esc(m.description).slice(0, 60)}</td>
+        <td><strong class="cell-num">${H.money(m.cost)}</strong> <small class="muted">บาท</small></td>
+        <td>${H.esc(m.vendor) || '-'}</td>
+        <td class="actions">
+          <button class="btn btn-danger btn-sm" data-act="delete" data-id="${H.esc(m.id)}" title="ลบ"><i class="fa-solid fa-trash-can"></i><span class="hide-xs">ลบ</span></button>
+        </td>
+      </tr>`).join('') || `<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">ยังไม่มีบันทึกซ่อมบำรุง</td></tr>`;
+
+    const totalCost = items.reduce((a, m) => a + (Number(m.cost) || 0), 0);
+    const byType = items.reduce((a, m) => { a[m.type || 'อื่นๆ'] = (a[m.type || 'อื่นๆ'] || 0) + 1; return a; }, {});
+    const topType = Object.keys(byType).sort((a,b) => byType[b] - byType[a])[0] || '-';
+    const stats = [
+      { lb: 'รายการทั้งหมด',  val: items.length,            icon: 'fa-screwdriver-wrench', grad: 'grad-violet' },
+      { lb: 'ค่าใช้จ่ายรวม',   val: totalCost.toFixed(2),    icon: 'fa-coins',              grad: 'grad-emerald' },
+      { lb: 'งานบ่อยที่สุด',   val: topType,                 icon: 'fa-chart-pie',          grad: 'grad-amber',  asText: true },
+      { lb: 'ประเภทงาน',       val: Object.keys(byType).length, icon: 'fa-tags',            grad: 'grad-sky' }
+    ];
+    const statsHtml = stats.map(s => `
+      <div class="mgr-stat">
+        <div class="mgr-stat-ico ${s.grad}"><i class="fa-solid ${s.icon}"></i></div>
+        <div>
+          <div class="mgr-stat-num" ${s.asText ? 'style="font-size:15px;font-family:inherit"' : ''}>${s.asText ? H.esc(s.val) : s.val}</div>
+          <div class="mgr-stat-lb">${H.esc(s.lb)}</div>
+        </div>
+      </div>`).join('');
+
+    return `
+      <div class="mgr-page">
+        <section class="mgr-hero">
+          <div class="mgr-hero-decor"></div>
+          <div class="mgr-hero-inner">
+            <div class="mgr-hero-title">
+              <div class="mgr-hero-icon"><i class="fa-solid fa-screwdriver-wrench"></i></div>
+              <div>
+                <h1 class="mgr-hero-h">บันทึกซ่อมบำรุง</h1>
+                <div class="mgr-hero-sub">ประวัติการซ่อม · ต้นทุน · ประเภทงาน</div>
+              </div>
+            </div>
+            <div class="mgr-hero-actions">
+              <button class="btn-app btn-app-primary" id="btnNewMaint">
+                <i class="fa-solid fa-plus"></i><span class="hide-sm">เพิ่มรายการ</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="mgr-stats">${statsHtml}</section>
+
+        <section class="card mgr-tablecard">
+          <div class="table-wrap">
+            <table class="table table-hover" id="maintTable">
+              <thead><tr><th>วันที่</th><th>รถ / ประเภท</th><th>รายละเอียด</th><th>ค่าใช้จ่าย</th><th>ร้าน/ช่าง</th><th style="text-align:right">การจัดการ</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    `;
+  };
+
+  Views.maintForm = function (d) {
+    const vs = (d.vehicles || []).map(v => `<option value="${H.esc(v.id)}">${H.esc(v.plate)} · ${H.esc(v.brand)} ${H.esc(v.model)}</option>`).join('');
+    const today = new Date().toISOString().slice(0, 10);
+    return `
+      <form id="maintForm" onsubmit="return false">
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-screwdriver-wrench"></i> ข้อมูลการซ่อม</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-regular fa-calendar"></i> วันที่ <span class="req">*</span></span>
+              <input type="date" name="maint_date" required value="${today}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-car-side"></i> รถ <span class="req">*</span></span>
+              <select name="vehicle_id" required><option value="">-- เลือกรถ --</option>${vs}</select>
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-tags"></i> ประเภทงาน</span>
+              <select name="type"><option value="">-- เลือก --</option>
+                <option>ซ่อมทั่วไป</option>
+                <option>เปลี่ยนถ่ายน้ำมันเครื่อง</option>
+                <option>ยาง</option>
+                <option>เบรก</option>
+                <option>ช่วงล่าง</option>
+                <option>ไฟฟ้า</option>
+                <option>ตรวจสภาพประจำปี</option>
+                <option>อื่นๆ</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span class="field-label"><i class="fa-solid fa-circle-info"></i> รายละเอียดงาน <span class="req">*</span></span>
+            <textarea name="description" rows="3" required maxlength="500" placeholder="บรรยายลักษณะงานซ่อม อาการ ชิ้นส่วน"></textarea>
+          </label>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-coins"></i> ค่าใช้จ่ายและอ้างอิง</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-road"></i> เลขไมล์</span>
+              <input type="number" name="mileage" min="0">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-baht-sign"></i> ค่าใช้จ่าย (บาท)</span>
+              <input type="number" name="cost" step="0.01" min="0" placeholder="0.00">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-store"></i> ร้าน / ช่าง</span>
+              <input type="text" name="vendor" maxlength="80">
+            </label>
+          </div>
+          <label class="field">
+            <span class="field-label"><i class="fa-regular fa-file-lines"></i> เลขใบเสร็จ</span>
+            <input type="text" name="receipt_no" maxlength="40">
+          </label>
+        </div>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  USERS (admin)
+   * ====================================================================== */
+  Views.users = function (d) {
+    const items = d.items || [];
+    const roleGrad = { admin:'grad-rose', manager:'grad-sky', approver:'grad-violet', user:'grad-emerald', driver:'grad-amber' };
+    const rows = items.map(u => {
+      const grad = roleGrad[u.role] || 'grad-slate';
+      const initial = (u.full_name || u.username || 'U').charAt(0).toUpperCase();
+      return `
+      <tr>
+        <td>
+          <div class="cell-primary">
+            <div class="cell-ico-round ${grad}">${H.esc(initial)}</div>
+            <div>
+              <div class="cell-main">${H.esc(u.full_name)}</div>
+              <div class="cell-sub"><code>${H.esc(u.username)}</code></div>
+            </div>
+          </div>
+        </td>
+        <td>${H.esc(u.email) || '-'}</td>
+        <td>${H.esc(u.department) || '-'}</td>
+        <td><span class="role-pill role-${H.esc(u.role)}">${H.esc(u.role_label || u.role)}</span></td>
+        <td>${H.statusBadge(u.status, u.status === 'active' ? 'ใช้งาน' : 'ปิด', u.status === 'active' ? 'var(--success)' : 'var(--muted)')}</td>
+        <td class="actions">
+          <button class="btn btn-ghost btn-sm"  data-act="edit"   data-id="${H.esc(u.id)}" title="แก้ไข"><i class="fa-solid fa-pen-to-square"></i><span class="hide-xs">แก้ไข</span></button>
+          <button class="btn btn-danger btn-sm" data-act="delete" data-id="${H.esc(u.id)}" title="ลบ"><i class="fa-solid fa-trash-can"></i><span class="hide-xs">ลบ</span></button>
+        </td>
+      </tr>`;
+    }).join('') || `<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">ยังไม่มีผู้ใช้</td></tr>`;
+
+    const byRole = items.reduce((a, u) => { a[u.role] = (a[u.role] || 0) + 1; return a; }, {});
+    const active = items.filter(u => u.status === 'active').length;
+    const stats = [
+      { lb: 'ผู้ใช้ทั้งหมด', val: items.length, icon: 'fa-users', grad: 'grad-sky' },
+      { lb: 'ใช้งานอยู่',    val: active,       icon: 'fa-circle-check', grad: 'grad-emerald' },
+      { lb: 'ผู้ดูแลระบบ',   val: byRole.admin || 0,    icon: 'fa-crown',      grad: 'grad-rose' },
+      { lb: 'คนขับ',         val: byRole.driver || 0,   icon: 'fa-id-card',    grad: 'grad-amber' }
+    ];
+    const statsHtml = stats.map(s => `
+      <div class="mgr-stat">
+        <div class="mgr-stat-ico ${s.grad}"><i class="fa-solid ${s.icon}"></i></div>
+        <div><div class="mgr-stat-num">${H.num(s.val)}</div><div class="mgr-stat-lb">${H.esc(s.lb)}</div></div>
+      </div>`).join('');
+
+    return `
+      <div class="mgr-page">
+        <section class="mgr-hero">
+          <div class="mgr-hero-decor"></div>
+          <div class="mgr-hero-inner">
+            <div class="mgr-hero-title">
+              <div class="mgr-hero-icon"><i class="fa-solid fa-users"></i></div>
+              <div>
+                <h1 class="mgr-hero-h">จัดการผู้ใช้งาน</h1>
+                <div class="mgr-hero-sub">บัญชีผู้ใช้ · บทบาท · สิทธิ์ · หน่วยงาน</div>
+              </div>
+            </div>
+            <div class="mgr-hero-actions">
+              <div class="mgr-search">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="text" id="userSearch" placeholder="ค้นหา username / ชื่อ / อีเมล...">
+              </div>
+              <button class="btn-app btn-app-primary" id="btnNewUser">
+                <i class="fa-solid fa-plus"></i><span class="hide-sm">เพิ่มผู้ใช้</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="mgr-stats">${statsHtml}</section>
+
+        <section class="card mgr-tablecard">
+          <div class="table-wrap">
+            <table class="table table-hover" id="userTable">
+              <thead><tr><th>ชื่อ / Username</th><th>อีเมล</th><th>หน่วยงาน</th><th>บทบาท</th><th>สถานะ</th><th style="text-align:right">การจัดการ</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    `;
+  };
+
+  Views.userForm = function (d) {
+    const u = d.user || {};
+    const isEdit = !!u.id;
+    const roles = (d.roles || []).map(r => `<option value="${H.esc(r.key)}" ${u.role === r.key ? 'selected' : ''}>${H.esc(r.label)}</option>`).join('');
+    return `
+      <form id="userForm" onsubmit="return false">
+        <input type="hidden" name="id" value="${H.esc(u.id || '')}">
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-lock"></i> ข้อมูลบัญชี</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-at"></i> ชื่อผู้ใช้ <span class="req">*</span></span>
+              <input type="text" name="username" required maxlength="40" ${isEdit ? 'readonly' : ''} value="${H.esc(u.username || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-key"></i> ${isEdit ? 'รหัสผ่านใหม่ (ว่าง = ไม่เปลี่ยน)' : 'รหัสผ่าน (≥8 ตัว)'} ${isEdit ? '' : '<span class="req">*</span>'}</span>
+              <input type="password" name="password" ${isEdit ? '' : 'required minlength="8"'} maxlength="60" placeholder="${isEdit ? 'เว้นว่างไว้ถ้าไม่ต้องการเปลี่ยน' : '••••••••'}">
+            </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-user"></i> ข้อมูลบุคคล</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-id-badge"></i> ชื่อ-นามสกุล <span class="req">*</span></span>
+              <input type="text" name="full_name" required maxlength="100" value="${H.esc(u.full_name || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-regular fa-envelope"></i> อีเมล</span>
+              <input type="email" name="email" maxlength="100" placeholder="name@example.com" value="${H.esc(u.email || '')}">
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-building"></i> หน่วยงาน</span>
+              <input type="text" name="department" maxlength="100" value="${H.esc(u.department || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-user-tie"></i> ตำแหน่ง</span>
+              <input type="text" name="position" maxlength="100" value="${H.esc(u.position || '')}">
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-phone"></i> เบอร์โทร</span>
+              <input type="text" name="phone" maxlength="30" value="${H.esc(u.phone || '')}">
+            </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-shield-halved"></i> สิทธิ์การใช้งาน</div>
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-user-shield"></i> บทบาท <span class="req">*</span></span>
+              <select name="role" required><option value="">-- เลือกบทบาท --</option>${roles}</select>
+            </label>
+            <label class="field">
+              <span class="field-label"><i class="fa-solid fa-signal"></i> สถานะบัญชี</span>
+              <select name="status">
+                <option value="active" ${u.status === 'active' ? 'selected' : ''}>ใช้งาน</option>
+                <option value="inactive" ${u.status === 'inactive' ? 'selected' : ''}>ปิดการใช้งาน</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  ASSIGN (L2 — จัดรถ + คนขับ) — เพิ่มการแสดงเหตุผลทำไมรถใช้ไม่ได้
+   * ====================================================================== */
+  Views.assignForm = function (d) {
+    const allV = d.vehiclesAll || d.vehicles || [];     // detailed (with reasons/conflicts)
+    const availV = (d.vehicles || []).filter(v => v.available !== false);
+    const unavailV = allV.filter(v => v.available === false);
+
+    const vs = availV.map(v =>
+      `<option value="${H.esc(v.id)}">${H.esc(v.plate)} · ${H.esc(v.brand)} ${H.esc(v.model)} (${H.num(v.seats)} ที่นั่ง)</option>`
+    ).join('');
+    const ds = (d.drivers || []).map(dr =>
+      `<option value="${H.esc(dr.id)}">${H.esc(dr.full_name)} ${dr.phone ? '· ' + H.esc(dr.phone) : ''}</option>`
+    ).join('');
+
+    // Build "why unavailable" list
+    const unavailBlock = unavailV.length ? `
+      <div class="assign-unavail">
+        <div class="assign-unavail-head">
+          <i class="fa-solid fa-circle-exclamation"></i>
+          <span>รถที่ใช้ไม่ได้ (${unavailV.length} คัน) — คลิกดูรายละเอียด</span>
+        </div>
+        <details class="assign-unavail-body">
+          <summary>แสดงเหตุผล</summary>
+          <ul class="assign-unavail-list">
+            ${unavailV.map(v => {
+              const reasons = (v.reasons || []).map(r => `<span class="assign-reason-tag reason-${r.code}"><i class="fa-solid fa-${r.code === 'conflict' ? 'clock' : r.code === 'seats' ? 'users' : r.code === 'maintenance' ? 'screwdriver-wrench' : 'ban'}"></i> ${H.esc(r.label)}</span>`).join('');
+              const conflicts = (v.conflicts || []).map(c => `
+                <div class="assign-conflict">
+                  <code>${H.esc(c.request_no)}</code>
+                  <span class="muted">${H.esc(c.requester_name)}</span>
+                  <span>· ${H.datetime(c.start_iso)} — ${H.datetime(c.end_iso)}</span>
+                </div>`).join('');
+              return `
+                <li>
+                  <div class="assign-unavail-v">
+                    <strong>${H.esc(v.plate)}</strong>
+                    <span class="muted">${H.esc(v.brand)} ${H.esc(v.model)} (${H.num(v.seats)} ที่นั่ง)</span>
+                  </div>
+                  <div class="assign-reasons">${reasons}</div>
+                  ${conflicts ? `<div class="assign-conflicts">${conflicts}</div>` : ''}
+                </li>`;
+            }).join('')}
+          </ul>
+        </details>
+      </div>` : '';
+
+    return `
+      <form id="assignForm" onsubmit="return false">
+        <input type="hidden" name="request_id" value="${H.esc(d.request_id || '')}">
+
+        <div class="assign-info">
+          <i class="fa-solid fa-circle-info"></i>
+          <span>โปรดเลือกรถและคนขับที่ไม่ชนเวลากับคำขออื่น · ตรวจที่นั่งให้พอ</span>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-car-side"></i> เลือกรถ</div>
+          <label class="field">
+            <span class="field-label"><i class="fa-solid fa-id-card-clip"></i> รถที่ว่าง (${availV.length} คัน) <span class="req">*</span></span>
+            <select name="vehicle_id" required>
+              <option value="">— เลือกรถ —</option>
+              ${vs || '<option disabled>ไม่มีรถว่างในช่วงเวลานี้</option>'}
+            </select>
+          </label>
+          ${unavailBlock}
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa-solid fa-user"></i> เลือกคนขับ</div>
+          <label class="field">
+            <span class="field-label"><i class="fa-solid fa-id-card"></i> คนขับที่ว่าง <span class="req">*</span></span>
+            <select name="driver_id" required>
+              <option value="">— เลือกคนขับ —</option>
+              ${ds || '<option disabled>ไม่มีคนขับว่างในช่วงเวลานี้</option>'}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label"><i class="fa-regular fa-note-sticky"></i> หมายเหตุ</span>
+            <textarea name="remark" rows="2" maxlength="500" placeholder="ข้อสั่งการ / หมายเหตุให้คนขับ"></textarea>
+          </label>
+        </div>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  SCHEDULE — ตารางการใช้รถ (Gantt-like timeline per vehicle)
+   * ====================================================================== */
+  Views.schedule = function (d) {
+    const fromStr = d.from;
+    const toStr   = d.to;
+    const vehicles = d.vehicles || [];
+    const fromD = new Date(fromStr + 'T00:00:00+07:00');
+    const toD   = new Date(toStr   + 'T23:59:59+07:00');
+    const totalMs = Math.max(1, toD - fromD);
+    const days = [];
+    const cursor = new Date(fromD);
+    while (cursor <= toD) {
+      days.push(new Date(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    const pct = (ms) => (Math.max(0, ms) / totalMs * 100);
+    const clamp = (d) => d < fromD ? fromD : d > toD ? toD : d;
+
+    const dayHeader = days.map(d => {
+      const isToday = d.toDateString() === new Date().toDateString();
+      const isWknd = (d.getDay() === 0 || d.getDay() === 6);
+      return `<div class="sch-day ${isToday ? 'is-today' : ''} ${isWknd ? 'is-weekend' : ''}">
+        <div class="sch-day-num">${d.getDate()}</div>
+        <div class="sch-day-mm">${d.toLocaleDateString('th-TH', { month: 'short' })}</div>
+      </div>`;
+    }).join('');
+
+    const totalBookings = vehicles.reduce((a, v) => a + (v.bookings || []).length, 0);
+    const busyVehicles = vehicles.filter(v => (v.bookings || []).length > 0).length;
+    const freeVehicles = vehicles.length - busyVehicles;
+
+    const rows = vehicles.map(v => {
+      const bookings = v.bookings || [];
+      const bars = bookings.map(b => {
+        const s = clamp(new Date(b.start_iso));
+        const e = clamp(new Date(b.end_iso));
+        const left  = pct(s - fromD);
+        const width = Math.max(0.5, pct(e - s));
+        const cls = 'sch-bar sch-bar-' + b.status;
+        const title = `${b.request_no} · ${b.purpose} (${b.requester_name || '-'}) — ${new Date(b.start_iso).toLocaleString('th-TH')} → ${new Date(b.end_iso).toLocaleString('th-TH')}`;
+        return `<div class="${cls}" style="left:${left}%;width:${width}%" data-id="${H.esc(b.request_id)}" title="${H.esc(title)}">
+          <span class="sch-bar-text">${H.esc(b.request_no)}</span>
+        </div>`;
+      }).join('');
+
+      const statusCls = v.status === 'available' ? 'v-status-avail'
+                       : v.status === 'in_use' ? 'v-status-inuse'
+                       : v.status === 'maintenance' ? 'v-status-maint'
+                       : 'v-status-other';
+      return `
+        <div class="sch-row">
+          <div class="sch-vinfo">
+            <div class="sch-vplate">${H.esc(v.plate)}</div>
+            <div class="sch-vsub">${H.esc(v.brand)} ${H.esc(v.model)}</div>
+            <div class="sch-vmeta">
+              <span class="sch-v-seats"><i class="fa-solid fa-users"></i> ${H.num(v.seats)}</span>
+              <span class="sch-v-status ${statusCls}">${H.esc(v.status_label || v.status)}</span>
+            </div>
+            <div class="sch-v-count"><i class="fa-regular fa-calendar-check"></i> ${bookings.length} จอง</div>
+          </div>
+          <div class="sch-track">
+            ${days.map((dd, i) => {
+              const isWknd = (dd.getDay() === 0 || dd.getDay() === 6);
+              const isToday = dd.toDateString() === new Date().toDateString();
+              return `<div class="sch-cell ${isWknd ? 'is-weekend' : ''} ${isToday ? 'is-today' : ''}" style="left:${i / days.length * 100}%;width:${100 / days.length}%"></div>`;
+            }).join('')}
+            ${bars || ''}
+          </div>
+        </div>`;
+    }).join('') || `<div class="muted" style="padding:24px;text-align:center">ไม่มีรถในระบบ</div>`;
+
+    return `
+      <div class="sch-page">
+        <section class="sch-hero">
+          <div class="cal-hero-decor"></div>
+          <div class="cal-hero-inner">
+            <div class="cal-hero-title">
+              <div class="cal-hero-icon"><i class="fa-solid fa-table-columns"></i></div>
+              <div>
+                <h1 class="cal-hero-h">ตารางการใช้รถ</h1>
+                <div class="cal-hero-sub">ดูสถานะรถแต่ละคัน · ว่าง/ไม่ว่าง · ช่วงเวลา · ${H.num(totalBookings)} รายการใน ${H.num(days.length)} วัน</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mgr-stats">
+          <div class="mgr-stat"><div class="mgr-stat-ico grad-emerald"><i class="fa-solid fa-car-side"></i></div>
+            <div><div class="mgr-stat-num">${H.num(vehicles.length)}</div><div class="mgr-stat-lb">รถทั้งหมด</div></div></div>
+          <div class="mgr-stat"><div class="mgr-stat-ico grad-sky"><i class="fa-solid fa-circle-check"></i></div>
+            <div><div class="mgr-stat-num">${H.num(freeVehicles)}</div><div class="mgr-stat-lb">ไม่มีจองในช่วงนี้</div></div></div>
+          <div class="mgr-stat"><div class="mgr-stat-ico grad-violet"><i class="fa-solid fa-clock"></i></div>
+            <div><div class="mgr-stat-num">${H.num(busyVehicles)}</div><div class="mgr-stat-lb">มีการจองอยู่</div></div></div>
+          <div class="mgr-stat"><div class="mgr-stat-ico grad-amber"><i class="fa-regular fa-calendar-check"></i></div>
+            <div><div class="mgr-stat-num">${H.num(totalBookings)}</div><div class="mgr-stat-lb">รายการจองรวม</div></div></div>
+        </section>
+
+        <section class="sch-toolbar">
+          <div class="sch-range">
+            <label class="rpt-filter-field">
+              <span><i class="fa-regular fa-calendar"></i> จากวันที่</span>
+              <input type="date" id="schFrom" value="${H.esc(fromStr)}">
+            </label>
+            <label class="rpt-filter-field">
+              <span><i class="fa-regular fa-calendar-check"></i> ถึงวันที่</span>
+              <input type="date" id="schTo" value="${H.esc(toStr)}">
+            </label>
+          </div>
+          <div class="sch-presets">
+            <button class="rpt-preset" data-sch-preset="7d">7 วัน</button>
+            <button class="rpt-preset" data-sch-preset="14d">14 วัน</button>
+            <button class="rpt-preset" data-sch-preset="30d">30 วัน</button>
+            <button class="rpt-preset" data-sch-preset="month">เดือนนี้</button>
+          </div>
+          <button class="btn-app btn-app-primary" id="btnSchApply">
+            <i class="fa-solid fa-arrows-rotate"></i><span>อัปเดต</span>
+          </button>
+        </section>
+
+        <section class="card sch-card">
+          <div class="sch-grid">
+            <div class="sch-grid-head">
+              <div class="sch-vinfo-head"><i class="fa-solid fa-car-side"></i> รถ</div>
+              <div class="sch-track-head">${dayHeader}</div>
+            </div>
+            <div class="sch-grid-body">${rows}</div>
+          </div>
+        </section>
+
+        <section class="sch-legend">
+          <span class="sch-legend-title">สถานะการจอง:</span>
+          <span class="sch-legend-item"><span class="sch-bar sch-bar-approved_l1" style="position:static;width:20px;height:14px"></span>รอจัดสรร</span>
+          <span class="sch-legend-item"><span class="sch-bar sch-bar-approved" style="position:static;width:20px;height:14px"></span>อนุมัติ</span>
+          <span class="sch-legend-item"><span class="sch-bar sch-bar-in_progress" style="position:static;width:20px;height:14px"></span>กำลังเดินทาง</span>
+        </section>
+      </div>
+    `;
+  };
+
+  /* ========================================================================
+   *  REPORTS — Premium (hero + type cards + presets + chart + table)
+   *   Keeps same contract { type, from, to } → api('report.' + type)
+   *   Results format unchanged: { title, columns, rows[], totals? }
+   * ====================================================================== */
+  Views.reports = function (d) {
+    const today = new Date();
+    const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
+    const lastOfMonth  = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10);
+    const selected = (d && d.type) || 'usageSummary';
+
+    const types = [
+      { key: 'usageSummary', label: 'สรุปการใช้รถ',     sub: 'ภาพรวมการใช้งาน · เมตริกหลัก',       icon: 'fa-chart-pie',    grad: 'grad-emerald' },
+      { key: 'byVehicle',    label: 'แยกตามรถ',         sub: 'จำนวนการใช้ · ระยะทาง · ต่อคัน',      icon: 'fa-car-side',     grad: 'grad-sky' },
+      { key: 'byDepartment', label: 'แยกตามหน่วยงาน',   sub: 'การใช้รถ · ต่อแผนก',                icon: 'fa-building',     grad: 'grad-violet' },
+      { key: 'byDriver',     label: 'แยกตามคนขับ',      sub: 'จำนวนงาน · ระยะทาง · ต่อคน',          icon: 'fa-id-card',      grad: 'grad-amber' }
+    ];
+    const typeCards = types.map(t => `
+      <button type="button" class="rpt-type-card ${t.key === selected ? 'active' : ''}" data-rpt-type="${t.key}">
+        <div class="rpt-type-ico ${t.grad}"><i class="fa-solid ${t.icon}"></i></div>
+        <div class="rpt-type-body">
+          <div class="rpt-type-label">${H.esc(t.label)}</div>
+          <div class="rpt-type-sub">${H.esc(t.sub)}</div>
+        </div>
+        <div class="rpt-type-check"><i class="fa-solid fa-circle-check"></i></div>
+      </button>`).join('');
+
+    return `
+      <div class="rpt-page">
+        <!-- Hero -->
+        <section class="rpt-hero">
+          <div class="rpt-hero-decor"></div>
+          <div class="rpt-hero-inner">
+            <div class="rpt-hero-title">
+              <div class="rpt-hero-icon"><i class="fa-solid fa-chart-line"></i></div>
+              <div>
+                <h1 class="rpt-hero-h">รายงานและสถิติ</h1>
+                <div class="rpt-hero-sub">วิเคราะห์การใช้ยานพาหนะ · สรุปข้อมูลเชิงลึก · ส่งออก CSV / พิมพ์</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Type cards -->
+        <section class="rpt-type-grid">${typeCards}</section>
+        <input type="hidden" id="reportType" value="${selected}">
+
+        <!-- Filter bar -->
+        <section class="rpt-filter">
+          <div class="rpt-filter-grid">
+            <label class="rpt-filter-field">
+              <span><i class="fa-regular fa-calendar"></i> จากวันที่</span>
+              <input type="date" id="reportFrom" value="${firstOfMonth}">
+            </label>
+            <label class="rpt-filter-field">
+              <span><i class="fa-regular fa-calendar-check"></i> ถึงวันที่</span>
+              <input type="date" id="reportTo" value="${lastOfMonth}">
+            </label>
+            <div class="rpt-filter-field rpt-presets">
+              <span><i class="fa-solid fa-bolt"></i> เลือกเร็ว</span>
+              <div class="rpt-preset-row">
+                <button type="button" class="rpt-preset" data-preset="7d">7 วัน</button>
+                <button type="button" class="rpt-preset" data-preset="30d">30 วัน</button>
+                <button type="button" class="rpt-preset active" data-preset="month">เดือนนี้</button>
+                <button type="button" class="rpt-preset" data-preset="quarter">ไตรมาสนี้</button>
+                <button type="button" class="rpt-preset" data-preset="year">ปีนี้</button>
+              </div>
+            </div>
+          </div>
+          <div class="rpt-filter-actions">
+            <button class="btn-app btn-app-ghost" id="btnClearRpt">
+              <i class="fa-solid fa-arrows-rotate"></i><span>รีเซ็ต</span>
+            </button>
+            <button class="btn-app btn-app-primary" id="btnRunReport">
+              <i class="fa-solid fa-play"></i><span>แสดงรายงาน</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Output -->
+        <div id="reportOutput" class="rpt-output"></div>
+      </div>
+    `;
+  };
+
+  Views.reportTable = function (d) {
+    const cols = d.columns || [];
+    const rows = d.rows || [];
+    const title = d.title || 'ผลลัพธ์รายงาน';
+
+    if (!rows.length) {
+      return `
+        <section class="card rpt-empty-card">
+          <div class="card-head"><h3><i class="fa-solid fa-inbox"></i> ${H.esc(title)}</h3></div>
+          ${H.empty('ไม่พบข้อมูลในช่วงเวลาที่เลือก · ลองปรับช่วงวันที่หรือประเภทรายงาน')}
+        </section>`;
+    }
+
+    // ---- Quick KPI from totals or computed ----
+    const numericCols = cols.filter(c => c.format === 'num' || c.format === 'money');
+    const computed = {};
+    numericCols.forEach(c => {
+      computed[c.key] = rows.reduce((a, r) => a + (Number(r[c.key]) || 0), 0);
+    });
+    const kpiCols = numericCols.slice(0, 4);
+    const kpiHtml = kpiCols.length ? kpiCols.map((c, i) => {
+      const grads = ['grad-emerald', 'grad-sky', 'grad-violet', 'grad-amber'];
+      const icons = ['fa-chart-column', 'fa-layer-group', 'fa-gauge-high', 'fa-coins'];
+      const v = d.totals && d.totals[c.key] != null ? d.totals[c.key] : computed[c.key];
+      const disp = c.format === 'money' ? H.money(v) : H.num(v);
+      return `
+        <div class="rpt-kpi">
+          <div class="rpt-kpi-ico ${grads[i % 4]}"><i class="fa-solid ${icons[i % 4]}"></i></div>
+          <div class="rpt-kpi-body">
+            <div class="rpt-kpi-num">${disp}</div>
+            <div class="rpt-kpi-lb">${H.esc(c.label)}</div>
+          </div>
+        </div>`;
+    }).join('') : '';
+
+    // ---- Chart data (first text column as label, first numeric as value) ----
+    const labelCol = cols.find(c => !c.format || c.format === 'text' || c.format === 'date') || cols[0];
+    const valueCol = numericCols[0];
+    const chartData = (labelCol && valueCol) ? {
+      labels: rows.slice(0, 12).map(r => String(r[labelCol.key] || '-').slice(0, 20)),
+      values: rows.slice(0, 12).map(r => Number(r[valueCol.key]) || 0),
+      valueLabel: valueCol.label,
+      format: valueCol.format
+    } : null;
+
+    // ---- Table HTML ----
+    const thead = cols.map(c => {
+      const al = (c.format === 'num' || c.format === 'money') ? 'text-right' : '';
+      return `<th class="${al}" data-col="${H.esc(c.key)}" data-fmt="${H.esc(c.format || 'text')}">
+        <button type="button" class="rpt-th-btn"><span>${H.esc(c.label)}</span><i class="fa-solid fa-sort"></i></button>
+      </th>`;
+    }).join('');
+
+    const tbody = rows.map((row, rowIdx) => `<tr>${cols.map(c => {
+      const v = row[c.key];
+      const fmt = c.format || 'text';
+      const al = (fmt === 'num' || fmt === 'money') ? 'text-right' : '';
+      let disp;
+      if (fmt === 'num')        disp = H.num(v);
+      else if (fmt === 'money') disp = `<span class="cell-num">${H.money(v)}</span>`;
+      else if (fmt === 'date')  disp = H.date(v);
+      else                      disp = H.esc(v);
+      return `<td class="${al}">${disp}</td>`;
+    }).join('')}</tr>`).join('');
+
+    const totalsRow = d.totals ? `<tfoot><tr>${cols.map(c => {
+      const v = d.totals[c.key];
+      const al = (c.format === 'num' || c.format === 'money') ? 'text-right' : '';
+      const disp = v == null ? '' : (c.format === 'money' ? H.money(v) : c.format === 'num' ? H.num(v) : H.esc(v));
+      return `<th class="${al}">${disp}</th>`;
+    }).join('')}</tr></tfoot>` : '';
+
+    return `
+      <section class="rpt-result-head card">
+        <div class="rpt-result-head-inner">
+          <div class="rpt-result-title">
+            <div class="rpt-result-ico"><i class="fa-solid fa-chart-line"></i></div>
+            <div>
+              <h3>${H.esc(title)}</h3>
+              <div class="rpt-result-meta">${H.num(rows.length)} แถว · สร้างเมื่อ ${H.datetime(new Date().toISOString())}</div>
+            </div>
+          </div>
+          <div class="rpt-result-actions">
+            <div class="rpt-search-wrap">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="rptSearch" placeholder="ค้นหาในตาราง...">
+            </div>
+            <button class="btn-app btn-app-ghost" id="btnPrintRpt" title="พิมพ์ / PDF">
+              <i class="fa-solid fa-print"></i><span class="hide-sm">พิมพ์</span>
+            </button>
+            <button class="btn-app btn-app-primary" id="btnExportCsv">
+              <i class="fa-solid fa-file-csv"></i><span class="hide-sm">ส่งออก CSV</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      ${kpiHtml ? `<section class="rpt-kpi-row">${kpiHtml}</section>` : ''}
+
+      ${chartData ? `
+        <section class="card rpt-chart-card">
+          <div class="card-head">
+            <h3><i class="fa-solid fa-chart-column"></i> กราฟเปรียบเทียบ — ${H.esc(chartData.valueLabel)}</h3>
+            <span class="muted">สูงสุด 12 อันดับแรก</span>
+          </div>
+          <div class="rpt-chart-wrap"><canvas id="rptChart"></canvas></div>
+          <div id="rptChartData" data-labels='${H.esc(JSON.stringify(chartData.labels))}' data-values='${H.esc(JSON.stringify(chartData.values))}' data-label='${H.esc(chartData.valueLabel)}' data-format='${H.esc(chartData.format || "num")}' hidden></div>
+        </section>` : ''}
+
+      <section class="card rpt-table-card">
+        <div class="table-wrap">
+          <table class="table" id="reportTbl">
+            <thead><tr>${thead}</tr></thead>
+            <tbody>${tbody}</tbody>
+            ${totalsRow}
+          </table>
+        </div>
+      </section>
+    `;
+  };
+
+  /* ========================================================================
+   *  PROFILE / CHANGE PASSWORD
+   * ====================================================================== */
+  Views.changePasswordForm = function () {
+    return `
+      <form id="passForm" class="form-grid" onsubmit="return false">
+        <label class="field"><span class="field-label">รหัสผ่านเดิม <span class="req">*</span></span>
+          <input type="password" name="oldPass" required></label>
+        <label class="field"><span class="field-label">รหัสผ่านใหม่ (ขั้นต่ำ 8 ตัว) <span class="req">*</span></span>
+          <input type="password" name="newPass" required minlength="8"></label>
+        <label class="field"><span class="field-label">ยืนยันรหัสผ่านใหม่ <span class="req">*</span></span>
+          <input type="password" name="confirmPass" required minlength="8"></label>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  REJECT REASON FORM
+   * ====================================================================== */
+  Views.rejectForm = function (d) {
+    return `
+      <form id="rejectForm" class="form-grid" onsubmit="return false">
+        <input type="hidden" name="request_id" value="${H.esc(d.request_id || '')}">
+        <label class="field"><span class="field-label">เหตุผลที่ไม่อนุมัติ <span class="req">*</span></span>
+          <textarea name="reason" rows="3" required maxlength="500"></textarea></label>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  CANCEL REASON FORM
+   * ====================================================================== */
+  Views.cancelForm = function (d) {
+    return `
+      <form id="cancelForm" class="form-grid" onsubmit="return false">
+        <input type="hidden" name="request_id" value="${H.esc(d.request_id || '')}">
+        <label class="field"><span class="field-label">เหตุผลในการยกเลิก</span>
+          <textarea name="reason" rows="3" maxlength="500"></textarea></label>
+      </form>
+    `;
+  };
+
+  /* ========================================================================
+   *  APPROVE REMARK
+   * ====================================================================== */
+  Views.approveForm = function (d) {
+    return `
+      <form id="approveForm" class="form-grid" onsubmit="return false">
+        <input type="hidden" name="request_id" value="${H.esc(d.request_id || '')}">
+        <label class="field"><span class="field-label">หมายเหตุ (ไม่บังคับ)</span>
+          <textarea name="remark" rows="2" maxlength="500"></textarea></label>
+      </form>
+    `;
+  };
+
+  global.Views = Views;
+})(window);
+</script>
