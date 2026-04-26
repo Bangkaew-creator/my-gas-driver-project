@@ -7,8 +7,8 @@
 
 // ---------- ข้อมูลระบบ (แก้ตรงนี้ก่อน deploy) ----------
 const SPREADSHEET_ID = '1jOC5stCTrsLFWSVSXhPsXexLAnQmS8g9xvTtAKlaCWE';
-const ADMIN_EMAIL    = 'wirathadkam@gmail.com';
-const ORG_NAME       = 'สำนักงานเดฟไทบ้าน2026';
+const ADMIN_EMAIL    = 'phd02bangknew@gmail.com';
+const ORG_NAME       = 'เทศบาลเมืองบางแก้ว';
 const SYSTEM_NAME    = 'ระบบขอใช้รถราชการ';
 
 // ---------- ชื่อชีตในฐานข้อมูล ----------
