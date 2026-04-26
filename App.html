@@ -1,0 +1,2022 @@
+<script>
+/* ============================================================================
+ *  App.html — Client-side orchestration
+ *  - API client (promise wrapper รอบ google.script.run)
+ *  - State, Session, Router (hash-based)
+ *  - Role-based navigation
+ *  - View dispatcher + event handlers (CRUD / Approval / Trip / Report)
+ *  - Modal / Toast / Loader helpers
+ * ============================================================================ */
+(function () {
+  'use strict';
+
+  /* =====================================================================
+   *  0) State
+   * =================================================================== */
+  const STORAGE_KEY = 'vbs.session.v1';
+  const State = {
+    token: null,
+    user: null,
+    lookup: null,
+    calendar: { year: new Date().getFullYear(), month: new Date().getMonth() + 1 },
+    filters: { requestStatus: '' },
+    reportLast: null
+  };
+
+  /* =====================================================================
+   *  1) API Client — Promise wrapper
+   * =================================================================== */
+  // Max time an api call is allowed to stay pending before we give up.
+  // Apps Script execution limit is ~6 min but typical calls are seconds.
+  const API_TIMEOUT_MS = 90 * 1000;
+
+  // google.script.run rejects payloads with null / undefined / NaN / Infinity
+  // inside objects with "Failed due to illegal value in property: X".
+  // Scrub them out before sending.
+  function _scrubPayload(v) {
+    if (v === null || v === undefined) return undefined;
+    if (typeof v === 'number') return isFinite(v) ? v : undefined;
+    if (v instanceof Date) return v;
+    if (Array.isArray(v)) {
+      const out = [];
+      v.forEach(x => { const s = _scrubPayload(x); if (s !== undefined) out.push(s); });
+      return out;
+    }
+    if (typeof v === 'object') {
+      const out = {};
+      Object.keys(v).forEach(k => {
+        const s = _scrubPayload(v[k]);
+        if (s !== undefined) out[k] = s;
+      });
+      return out;
+    }
+    return v;
+  }
+
+  function api(action, payload, opts) {
+    const silent = !!(opts && opts.silent);
+    if (!silent) {
+      const status = loader.forApi(action);
+      loader.show(status.msg, status.sub, status.icon);
+    }
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer = null;
+
+      const finish = (fn, arg) => {
+        if (settled) return;
+        settled = true;
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!silent) loader.hide();
+        fn(arg);
+      };
+
+      if (!google || !google.script || !google.script.run) {
+        return finish(reject, { code: 'no_gas', message: 'ไม่พบ google.script.run (รันบน web app ไหม?)' });
+      }
+
+      // Hard timeout — so the loader is guaranteed to come down.
+      timer = setTimeout(() => {
+        console.error('[api] timeout waiting for response | action:', action);
+        finish(reject, { code: 'timeout', message: 'หมดเวลาการตอบกลับจากเซิร์ฟเวอร์ (action=' + action + ')' });
+      }, API_TIMEOUT_MS);
+
+      try {
+        const safePayload = _scrubPayload(payload) || {};
+        google.script.run
+          .withSuccessHandler(res => {
+            if (!res) {
+              console.error('[api] empty response for action:', action, 'payload:', payload, 'raw res:', res);
+              return finish(reject, { code: 'empty', message: 'ไม่มีข้อมูลตอบกลับ (action=' + action + ')' });
+            }
+            if (res.ok) return finish(resolve, res.data);
+            if (res.error && res.error.code === 'session_expired') {
+              clearSession();
+              showLogin();
+              toast.warn('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');
+            }
+            console.error('[api] error for action:', action,
+              '| code:', (res.error && res.error.code) || '(none)',
+              '| message:', (res.error && res.error.message) || '(none)',
+              '| full:', JSON.stringify(res));
+            finish(reject, res.error || { code: 'unknown', message: 'เกิดข้อผิดพลาด' });
+          })
+          .withFailureHandler(err => {
+            console.error('[api] gas failure for action:', action, 'err:', err);
+            finish(reject, { code: 'gas_fail', message: (err && err.message) || String(err) });
+          })
+          .api(action, State.token, safePayload);
+      } catch (e) {
+        // google.script.run itself threw synchronously (e.g. unserializable payload)
+        console.error('[api] invoke threw sync for action:', action, 'err:', e);
+        finish(reject, { code: 'invoke_fail', message: (e && e.message) || String(e) });
+      }
+    });
+  }
+
+  /* =====================================================================
+   *  2) Session persistence
+   * =================================================================== */
+  function saveSession() {
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ token: State.token, user: State.user }));
+    } catch (e) { /* ignore */ }
+  }
+  function loadSession() {
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) { return null; }
+  }
+  function clearSession() {
+    State.token = null;
+    State.user = null;
+    State.lookup = null;
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch (e) { }
+  }
+
+  /* =====================================================================
+   *  3) Loader / Toast / Modal helpers
+   * =================================================================== */
+  // Status labels per API action — shows in loader card while waiting
+  // Icons use Font Awesome 6 class names (without the leading "fa-solid")
+  const API_STATUS = {
+    'login':             ['fa-right-to-bracket',    'กำลังเข้าสู่ระบบ',        'ตรวจสอบข้อมูลประจำตัว'],
+    'logout':            ['fa-right-from-bracket',  'กำลังออกจากระบบ',        'ล้างข้อมูลเซสชัน'],
+    'me':                ['fa-user',                'โหลดโปรไฟล์',            'ดึงข้อมูลผู้ใช้ปัจจุบัน'],
+    'user.changePass':   ['fa-key',                 'เปลี่ยนรหัสผ่าน',         'กำลังบันทึกรหัสผ่านใหม่'],
+    'lookup.all':        ['fa-boxes-stacked',       'โหลดข้อมูลประกอบ',       'ประเภทรถ / สถานะ / รายการ'],
+
+    'request.list':      ['fa-file-lines',          'โหลดรายการคำขอ',        'ดึงข้อมูลจากฐานข้อมูล'],
+    'request.get':       ['fa-file-invoice',        'โหลดรายละเอียดคำขอ',    'รวมประวัติการอนุมัติ'],
+    'request.create':    ['fa-wand-magic-sparkles', 'บันทึกคำขอใหม่',         'สร้างเลขที่คำขอ'],
+    'request.update':    ['fa-floppy-disk',         'อัปเดตคำขอ',             'บันทึกการเปลี่ยนแปลง'],
+    'request.cancel':    ['fa-trash-can',           'ยกเลิกคำขอ',              'คืนสถานะรถ'],
+    'request.myInbox':   ['fa-inbox',               'โหลดกล่องขาเข้าของฉัน',  'คัดกรองคำขอที่เกี่ยวข้อง'],
+
+    'approval.pending':  ['fa-circle-check',        'โหลดคิวอนุมัติ',          'ตามระดับสิทธิ์ของคุณ'],
+    'approval.approve':  ['fa-check',               'กำลังอนุมัติ',             'อัปเดตสถานะคำขอ'],
+    'approval.reject':   ['fa-circle-xmark',        'กำลังปฏิเสธ',              'บันทึกเหตุผล'],
+    'approval.assign':   ['fa-car-side',            'จัดสรรรถ / คนขับ',         'ตรวจสอบเวลาชน'],
+    'approval.history':  ['fa-clock-rotate-left',   'โหลดประวัติการอนุมัติ',   ''],
+
+    'vehicle.list':      ['fa-car-side',            'โหลดข้อมูลรถ',            'ดึงทะเบียนรถทั้งหมด'],
+    'vehicle.get':       ['fa-car-side',            'โหลดข้อมูลรถ',            ''],
+    'vehicle.save':      ['fa-floppy-disk',         'บันทึกข้อมูลรถ',          'อัปเดตทะเบียน'],
+    'vehicle.delete':    ['fa-trash-can',           'ลบข้อมูลรถ',              'ยืนยันการลบ'],
+    'vehicle.availableOn':       ['fa-magnifying-glass',  'ค้นหารถที่ว่าง',        'เช็คเวลาชน + คัดกรอง'],
+    'vehicle.availabilityCheck': ['fa-circle-info',       'ตรวจความพร้อมใช้งาน',  'เช็คสถานะทุกคัน'],
+    'vehicle.schedule':          ['fa-table-columns',     'โหลดตารางใช้รถ',        ''],
+
+    'driver.list':       ['fa-id-card',             'โหลดข้อมูลคนขับ',         ''],
+    'driver.get':        ['fa-id-card',             'โหลดข้อมูลคนขับ',         ''],
+    'driver.save':       ['fa-floppy-disk',         'บันทึกข้อมูลคนขับ',        ''],
+    'driver.delete':     ['fa-trash-can',           'ลบข้อมูลคนขับ',           ''],
+
+    'trip.start':        ['fa-play',                'เริ่มการเดินทาง',          'บันทึกไมล์ออก'],
+    'trip.complete':     ['fa-flag-checkered',      'สิ้นสุดการเดินทาง',        'คำนวณระยะทาง'],
+    'trip.myTasks':      ['fa-list-check',          'โหลดงานขับรถของฉัน',     ''],
+
+    'fuel.list':         ['fa-gas-pump',            'โหลดบันทึกน้ำมัน',         ''],
+    'fuel.save':         ['fa-floppy-disk',         'บันทึกการเติมน้ำมัน',     ''],
+    'fuel.delete':       ['fa-trash-can',           'ลบบันทึกน้ำมัน',           ''],
+
+    'maint.list':        ['fa-screwdriver-wrench',  'โหลดบันทึกซ่อมบำรุง',      ''],
+    'maint.save':        ['fa-floppy-disk',         'บันทึกการซ่อมบำรุง',       ''],
+    'maint.delete':      ['fa-trash-can',           'ลบบันทึกซ่อมบำรุง',       ''],
+
+    'user.list':         ['fa-users',               'โหลดรายชื่อผู้ใช้',        ''],
+    'user.get':          ['fa-user',                'โหลดข้อมูลผู้ใช้',         ''],
+    'user.save':         ['fa-floppy-disk',         'บันทึกผู้ใช้',              ''],
+    'user.delete':       ['fa-trash-can',           'ลบผู้ใช้',                  ''],
+
+    'report.dashboard':     ['fa-chart-column',     'โหลดแดชบอร์ด',         'รวบรวมสถิติทุกโมดูล'],
+    'report.calendar':      ['fa-calendar-days',    'โหลดปฏิทิน',             ''],
+    'report.byVehicle':     ['fa-chart-line',       'รายงานตามรถ',           ''],
+    'report.byDepartment':  ['fa-chart-line',       'รายงานตามแผนก',         ''],
+    'report.byDriver':      ['fa-chart-line',       'รายงานตามคนขับ',        ''],
+    'report.usageSummary':  ['fa-chart-line',       'สรุปการใช้งาน',          '']
+  };
+
+  const loader = (function () {
+    let count = 0;
+    const el  = () => document.getElementById('loader');
+    const msg = () => document.getElementById('loaderMsg');
+    const sub = () => document.getElementById('loaderSub');
+    const ico = () => document.getElementById('loaderCoreIcon');
+    let hideTimer = null;
+    let watchdog  = null;          // auto-reset if stuck open
+    const MAX_SHOW_MS = 120 * 1000; // 2 min safety net
+
+    function render() {
+      const root = el();
+      if (!root) return;
+      if (count > 0) {
+        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+        root.classList.remove('is-hiding');
+        root.hidden = false;
+        // watchdog: if still open after MAX_SHOW_MS, force reset
+        if (!watchdog) {
+          watchdog = setTimeout(() => {
+            console.warn('[loader] watchdog triggered — force-resetting after', MAX_SHOW_MS, 'ms');
+            count = 0;
+            watchdog = null;
+            render();
+            try { toast.warn('หมดเวลารอการตอบกลับ — รีเฟรชอัตโนมัติ'); } catch (e) {}
+          }, MAX_SHOW_MS);
+        }
+      } else {
+        if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+        root.classList.add('is-hiding');
+        hideTimer = setTimeout(() => {
+          if (count === 0) {
+            root.hidden = true;
+            root.classList.remove('is-hiding');
+          }
+        }, 200);
+      }
+    }
+    function setIcon(icon) {
+      const el = ico();
+      if (!el || !icon) return;
+      // FA class like "fa-xxx"  →  <i class="fa-solid fa-xxx">
+      if (/^fa-/.test(icon)) {
+        el.innerHTML = '<i class="fa-solid ' + icon + '"></i>';
+      } else {
+        // plain text / emoji fallback
+        el.textContent = icon;
+      }
+    }
+    return {
+      show(message, subtext, icon) {
+        count++;
+        if (message && msg()) msg().textContent = message;
+        if (subtext !== undefined && sub()) sub().textContent = subtext;
+        if (icon) setIcon(icon);
+        render();
+      },
+      hide() {
+        count = Math.max(0, count - 1);
+        render();
+      },
+      setStatus(message, subtext, icon) {
+        if (message && msg()) msg().textContent = message;
+        if (subtext !== undefined && sub()) sub().textContent = subtext;
+        if (icon) setIcon(icon);
+      },
+      forApi(action) {
+        const s = API_STATUS[action] || ['fa-bolt', 'กำลังประมวลผล', action];
+        return { icon: s[0], msg: s[1], sub: s[2] };
+      },
+      reset() { count = 0; render(); }
+    };
+  })();
+
+  const toast = (function () {
+    const box = () => document.getElementById('toasts');
+    function show(msg, kind) {
+      const el = document.createElement('div');
+      el.className = 'toast toast-' + (kind || 'info');
+      el.textContent = msg;
+      box().appendChild(el);
+      setTimeout(() => el.classList.add('toast-in'), 10);
+      setTimeout(() => {
+        el.classList.remove('toast-in');
+        setTimeout(() => el.remove(), 250);
+      }, 3500);
+    }
+    return {
+      info: m => show(m, 'info'),
+      success: m => show(m, 'success'),
+      warn: m => show(m, 'warn'),
+      error: m => show(m, 'error')
+    };
+  })();
+  window.toast = toast;
+
+  const modal = (function () {
+    const m = () => document.getElementById('modal');
+    const mt = () => document.getElementById('modalTitle');
+    const mb = () => document.getElementById('modalBody');
+    const mf = () => document.getElementById('modalFoot');
+    function open(opts) {
+      mt().innerHTML = opts.title || '';
+      mb().innerHTML = opts.body || '';
+      const btns = (opts.buttons || [{ label: 'ปิด', class: 'btn-ghost', close: true }]).map((b, i) =>
+        `<button type="button" class="btn ${b.class || 'btn-ghost'}" data-btn="${i}">${b.label}</button>`).join('');
+      mf().innerHTML = btns;
+      m().hidden = false;
+      // wire buttons
+      mf().querySelectorAll('[data-btn]').forEach(el => {
+        el.addEventListener('click', () => {
+          const idx = Number(el.getAttribute('data-btn'));
+          const btn = (opts.buttons || [])[idx];
+          if (btn && typeof btn.onClick === 'function') {
+            const res = btn.onClick();
+            if (res === false) return; // keep open
+          }
+          close();
+        });
+      });
+    }
+    function close() { m().hidden = true; }
+    document.addEventListener('click', ev => {
+      if (ev.target.matches('[data-close]')) close();
+    });
+    document.addEventListener('keydown', ev => { if (ev.key === 'Escape') close(); });
+    return { open, close };
+  })();
+  window.modal = modal;
+
+  function confirmDialog(message, title) {
+    return new Promise(resolve => {
+      modal.open({
+        title: title || 'ยืนยัน',
+        body: `<p>${message}</p>`,
+        buttons: [
+          { label: 'ยกเลิก', class: 'btn-ghost', onClick: () => resolve(false) },
+          { label: 'ตกลง', class: 'btn-primary', onClick: () => resolve(true) }
+        ]
+      });
+    });
+  }
+
+  /* =====================================================================
+   *  4) Nav menu (role-based, grouped by mission)
+   *      Logic preserved 100% — only presentation changed:
+   *        - items keep the same hash + roles as before
+   *        - now carry a `group` tag so they render under a section header
+   *        - sections with zero visible items are skipped entirely
+   * =================================================================== */
+  const NAV_GROUPS = [
+    { key: 'overview', label: 'ภาพรวม' },
+    { key: 'mine',     label: 'ภารกิจของฉัน' },
+    { key: 'approval', label: 'การอนุมัติ & คำขอ' },
+    { key: 'fleet',    label: 'จัดการยานพาหนะ' },
+    { key: 'admin',    label: 'รายงาน & ตั้งค่า' }
+  ];
+
+  function buildNav() {
+    const role = (State.user || {}).role;
+    const items = [
+      // ภาพรวม
+      { group: 'overview', hash: '#/dashboard',     icon: 'fa-chart-column',       label: 'แดชบอร์ด',     roles: ['admin', 'manager', 'approver', 'user', 'driver'] },
+      { group: 'overview', hash: '#/calendar',      icon: 'fa-calendar-days',      label: 'ปฏิทินใช้รถ',   roles: ['admin', 'manager', 'approver', 'user', 'driver'] },
+      { group: 'overview', hash: '#/schedule',      icon: 'fa-table-columns',      label: 'ตารางใช้รถ',    roles: ['admin', 'manager', 'approver', 'user', 'driver'] },
+      // ภารกิจของฉัน
+      { group: 'mine',     hash: '#/requests/mine', icon: 'fa-file-lines',         label: 'คำขอของฉัน',    roles: ['admin', 'manager', 'approver', 'user', 'driver'] },
+      { group: 'mine',     hash: '#/request/new',   icon: 'fa-plus',               label: 'สร้างคำขอใหม่',  roles: ['admin', 'manager', 'approver', 'user'] },
+      { group: 'mine',     hash: '#/trips',         icon: 'fa-route',              label: 'งานขับรถของฉัน', roles: ['driver', 'admin'] },
+      // การอนุมัติ & คำขอ
+      { group: 'approval', hash: '#/approval',      icon: 'fa-circle-check',       label: 'คิวอนุมัติ',     roles: ['admin', 'manager', 'approver'] },
+      { group: 'approval', hash: '#/requests/all',  icon: 'fa-folder-open',        label: 'คำขอทั้งหมด',   roles: ['admin', 'manager'] },
+      // จัดการยานพาหนะ
+      { group: 'fleet',    hash: '#/vehicles',      icon: 'fa-car-side',           label: 'จัดการรถ',      roles: ['admin', 'manager'] },
+      { group: 'fleet',    hash: '#/drivers',       icon: 'fa-id-card',            label: 'จัดการคนขับ',   roles: ['admin', 'manager'] },
+      { group: 'fleet',    hash: '#/fuel',          icon: 'fa-gas-pump',           label: 'เติมน้ำมัน',    roles: ['admin', 'manager', 'driver'] },
+      { group: 'fleet',    hash: '#/maint',         icon: 'fa-screwdriver-wrench', label: 'ซ่อมบำรุง',     roles: ['admin', 'manager'] },
+      // รายงาน & ตั้งค่า
+      { group: 'admin',    hash: '#/reports',       icon: 'fa-chart-line',         label: 'รายงาน',       roles: ['admin', 'manager'] },
+      { group: 'admin',    hash: '#/users',         icon: 'fa-users',              label: 'ผู้ใช้งาน',     roles: ['admin'] }
+    ];
+
+    const visible = items.filter(it => it.roles.indexOf(role) >= 0);
+    const html = NAV_GROUPS.map(g => {
+      const groupItems = visible.filter(it => it.group === g.key);
+      if (!groupItems.length) return '';
+      const links = groupItems.map(it =>
+        `<a href="${it.hash}" class="sidenav-item" data-hash="${it.hash}">` +
+          `<span class="sidenav-icon"><i class="fa-solid ${it.icon}"></i></span>` +
+          `<span class="sidenav-text">${it.label}</span>` +
+        `</a>`
+      ).join('');
+      return `<div class="sidenav-label">${g.label}</div>${links}`;
+    }).join('<div class="sidenav-sep"></div>');
+
+    document.getElementById('sidenav').innerHTML = html;
+    highlightNav();
+  }
+  function highlightNav() {
+    const current = location.hash || '#/dashboard';
+    document.querySelectorAll('#sidenav .sidenav-item').forEach(el => {
+      const h = el.getAttribute('data-hash');
+      el.classList.toggle('active', current === h || (current.startsWith(h + '/')) || (h === '#/requests/mine' && current.startsWith('#/request/view')));
+    });
+  }
+
+  /* =====================================================================
+   *  4b) Digital clock in sidebar header (updates every second)
+   * =================================================================== */
+  const TH_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  let _clockTimer = null;
+  function startClock() {
+    if (_clockTimer) return;
+    const tick = () => {
+      const el = document.getElementById('sideClockTime');
+      const dl = document.getElementById('sideClockDate');
+      if (!el || !dl) return;
+      const d = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      el.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+      dl.textContent = d.getDate() + ' ' + TH_MONTHS[d.getMonth()] + ' ' + (d.getFullYear() + 543);
+    };
+    tick();
+    _clockTimer = setInterval(tick, 1000);
+  }
+
+  /* =====================================================================
+   *  5) Router
+   * =================================================================== */
+  const pageEl = () => document.getElementById('page');
+  const titleEl = () => document.getElementById('pageTitle');
+
+  async function routeTo() {
+    const hash = location.hash || '#/dashboard';
+    highlightNav();
+
+    // parse "#/foo/bar/123"
+    const parts = hash.replace(/^#\//, '').split('/');
+    const [root, sub, arg] = parts;
+
+    try {
+      switch (root) {
+        case '':
+        case 'dashboard':      return await pageDashboard();
+        case 'requests':
+          if (sub === 'mine')  return await pageRequestList({ scope: 'mine', title: 'คำขอของฉัน' });
+          if (sub === 'all')   return await pageRequestList({ scope: 'all',  title: 'คำขอทั้งหมด' });
+          break;
+        case 'request':
+          if (sub === 'new')          return await pageRequestCreate();
+          if (sub === 'view' && arg)  return await pageRequestView(arg);
+          if (sub === 'edit' && arg)  return await pageRequestEdit(arg);
+          break;
+        case 'approval':       return await pageApproval();
+        case 'trips':          return await pageTrips();
+        case 'calendar':       return await pageCalendar();
+        case 'schedule':       return await pageSchedule();
+        case 'vehicles':       return await pageVehicles();
+        case 'drivers':        return await pageDrivers();
+        case 'fuel':           return await pageFuel();
+        case 'maint':          return await pageMaint();
+        case 'users':          return await pageUsers();
+        case 'reports':        return await pageReports();
+      }
+      pageEl().innerHTML = `<div class="card"><h2>ไม่พบหน้านี้</h2><p>กรุณาเลือกเมนูอื่น</p></div>`;
+      titleEl().textContent = '—';
+    } catch (e) {
+      pageEl().innerHTML = `<div class="card"><h2>เกิดข้อผิดพลาด</h2><p class="muted">${(e && e.message) || e}</p></div>`;
+      toast.error((e && e.message) || 'เกิดข้อผิดพลาด');
+    }
+  }
+
+  /* =====================================================================
+   *  6) Pages
+   * =================================================================== */
+
+  /* ---- Dashboard ---- */
+  // Keep chart instances so we can destroy before re-render
+  const _dashCharts = {};
+  function _destroyDashCharts() {
+    Object.keys(_dashCharts).forEach(k => {
+      try { _dashCharts[k] && _dashCharts[k].destroy(); } catch (e) { }
+      delete _dashCharts[k];
+    });
+  }
+
+  async function pageDashboard() {
+    titleEl().textContent = 'แดชบอร์ด';
+    loader.show();
+    try {
+      const data = await api('report.dashboard');
+      pageEl().innerHTML = Views.dashboard(data);
+      wireDashboard(data);
+    } finally { loader.hide(); }
+  }
+
+  function wireDashboard(data) {
+    _destroyDashCharts();
+
+    // restore theme
+    const savedTheme = localStorage.getItem('vbs.theme') || 'emerald';
+    applyTheme(savedTheme);
+
+    // theme switcher
+    document.querySelectorAll('.theme-switcher .theme-dot').forEach(b => {
+      if (b.getAttribute('data-theme') === savedTheme) b.classList.add('active');
+      b.addEventListener('click', () => {
+        const t = b.getAttribute('data-theme');
+        document.querySelectorAll('.theme-switcher .theme-dot').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        applyTheme(t);
+        try { localStorage.setItem('vbs.theme', t); } catch (e) { }
+        // re-render charts with new accent if needed
+        renderDashCharts(data);
+      });
+    });
+
+    // row click → request detail
+    document.querySelectorAll('#recentTable tr.clickable').forEach(tr => {
+      tr.addEventListener('click', () => { location.hash = '#/request/view/' + tr.getAttribute('data-id'); });
+    });
+
+    // filter handlers
+    const applyFilters = () => {
+      const from = (document.getElementById('dashFrom') || {}).value || '';
+      const to   = (document.getElementById('dashTo')   || {}).value || '';
+      const st   = (document.getElementById('dashStatus') || {}).value || '';
+      const q    = ((document.getElementById('dashSearch') || {}).value || '').trim().toLowerCase();
+      const fromDt = from ? new Date(from) : null;
+      const toDt   = to   ? new Date(to + 'T23:59:59') : null;
+      document.querySelectorAll('#recentBody tr[data-id]').forEach(tr => {
+        const rowStart = tr.getAttribute('data-start');
+        const rowStatus = tr.getAttribute('data-status');
+        const rowText = tr.textContent.toLowerCase();
+        let show = true;
+        if (st && rowStatus !== st) show = false;
+        if (show && fromDt && rowStart) { if (new Date(rowStart) < fromDt) show = false; }
+        if (show && toDt   && rowStart) { if (new Date(rowStart) > toDt)   show = false; }
+        if (show && q && rowText.indexOf(q) < 0) show = false;
+        tr.style.display = show ? '' : 'none';
+      });
+    };
+    ['dashFrom', 'dashTo', 'dashStatus', 'dashSearch'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', applyFilters);
+    });
+    const clearBtn = document.getElementById('btnClearFilter');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      ['dashFrom', 'dashTo', 'dashStatus', 'dashSearch'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      applyFilters();
+    });
+
+    // print
+    const printBtn = document.getElementById('btnPrintDash');
+    if (printBtn) printBtn.addEventListener('click', () => {
+      document.body.classList.add('printing-dash');
+      setTimeout(() => {
+        window.print();
+        setTimeout(() => document.body.classList.remove('printing-dash'), 500);
+      }, 150);
+    });
+
+    // refresh
+    const refreshBtn = document.getElementById('btnRefreshDash');
+    if (refreshBtn) refreshBtn.addEventListener('click', () => pageDashboard());
+
+    // charts
+    renderDashCharts(data);
+  }
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme || 'emerald');
+  }
+
+  function renderDashCharts(data) {
+    if (typeof Chart === 'undefined') return;
+    _destroyDashCharts();
+    const s = (data && data.stats) || {};
+    const recent = (data && data.recent) || [];
+
+    // Common config
+    const gridColor = 'rgba(148,163,184,.2)';
+    const tickColor = '#475569';
+    Chart.defaults.font.family = "'IBM Plex Sans Thai', 'Sarabun', sans-serif";
+    Chart.defaults.color = tickColor;
+
+    // 1) Donut — status breakdown
+    const donutEl = document.getElementById('chartStatus');
+    if (donutEl) {
+      const labels = ['รออนุมัติ', 'อนุมัติ', 'กำลังเดินทาง', 'เสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิก'];
+      const values = [s.pending || 0, s.approved || 0, s.inProgress || 0, s.completed || 0, s.rejected || 0, s.cancelled || 0];
+      const colors = ['#f59e0b', '#10b981', '#8b5cf6', '#0ea5e9', '#ef4444', '#9ca3af'];
+      _dashCharts.status = new Chart(donutEl, {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 2, borderColor: '#fff', hoverOffset: 8 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          cutout: '65%',
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: (c) => `${c.label}: ${c.parsed} (${Math.round(c.parsed / (values.reduce((a,b)=>a+b,0) || 1) * 100)}%)` } }
+          }
+        }
+      });
+      const legend = document.getElementById('legendStatus');
+      if (legend) {
+        legend.innerHTML = labels.map((l, i) => `
+          <div class="legend-item">
+            <span class="legend-swatch" style="background:${colors[i]}"></span>
+            <span class="legend-label">${l}</span>
+            <span class="legend-value">${values[i].toLocaleString('th-TH')}</span>
+          </div>`).join('');
+      }
+    }
+
+    // 2) Bar — fleet status
+    const barEl = document.getElementById('chartFleet');
+    if (barEl) {
+      _dashCharts.fleet = new Chart(barEl, {
+        type: 'bar',
+        data: {
+          labels: ['พร้อมใช้งาน', 'กำลังใช้งาน', 'ซ่อมบำรุง'],
+          datasets: [{
+            label: 'จำนวน (คัน)',
+            data: [s.vehiclesAvailable || 0, s.vehiclesInUse || 0, s.vehiclesMaint || 0],
+            backgroundColor: ['#10b981', '#8b5cf6', '#f59e0b'],
+            borderRadius: 8,
+            barThickness: 36
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: gridColor }, ticks: { precision: 0 } },
+            x: { grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    // 3) Line — trend from recent (group by date, count)
+    const lineEl = document.getElementById('chartTrend');
+    if (lineEl) {
+      const byDay = {};
+      recent.forEach(r => {
+        const k = (r.start_datetime || r.created_at || '').slice(0, 10);
+        if (!k) return;
+        byDay[k] = (byDay[k] || 0) + 1;
+      });
+      const keys = Object.keys(byDay).sort();
+      const labels = keys.length ? keys : ['—'];
+      const values = keys.length ? keys.map(k => byDay[k]) : [0];
+      _dashCharts.trend = new Chart(lineEl, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'คำขอ',
+            data: values,
+            borderColor: getComputedStyle(document.documentElement).getPropertyValue('--theme-accent').trim() || '#10b981',
+            backgroundColor: 'rgba(16,185,129,.15)',
+            fill: true, tension: 0.35,
+            pointRadius: 4, pointHoverRadius: 6
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: gridColor }, ticks: { precision: 0 } },
+            x: { grid: { display: false } }
+          }
+        }
+      });
+    }
+  }
+
+  /* ---- Request list ---- */
+  async function pageRequestList(opts) {
+    titleEl().textContent = opts.title;
+    loader.show();
+    try {
+      const data = await api('request.list', { scope: opts.scope, status: State.filters.requestStatus || '' });
+      pageEl().innerHTML = Views.requestList({ items: data.items, title: opts.title, statusList: (State.lookup || {}).statusList || [] });
+      document.querySelectorAll('#requestTable tr.clickable').forEach(tr => {
+        tr.addEventListener('click', () => { location.hash = '#/request/view/' + tr.getAttribute('data-id'); });
+      });
+      const fs = document.getElementById('filterStatus');
+      if (fs) {
+        fs.value = State.filters.requestStatus || '';
+        fs.addEventListener('change', () => {
+          State.filters.requestStatus = fs.value;
+          routeTo();
+        });
+      }
+    } finally { loader.hide(); }
+  }
+
+  /* ---- Request create ---- */
+  async function pageRequestCreate() {
+    titleEl().textContent = 'สร้างคำขอใช้รถ';
+    await ensureLookup();
+    pageEl().innerHTML = Views.requestCreate({ me: State.user, vehicleTypes: (State.lookup || {}).vehicleTypes || [] });
+    document.getElementById('submitRequest').addEventListener('click', () => handleRequestSubmit());
+    _wireAvailPreview();
+  }
+
+  /* Vehicle availability preview on request form
+   *  — ดูรถว่าง/ไม่ว่างตามวัน-เวลาและจำนวนผู้โดยสารที่เลือก
+   *  — debounced so we don't spam the server while user is typing
+   */
+  let _availDebounce = null;
+  let _availReqToken = 0;
+  function _wireAvailPreview(excludeRequestId) {
+    const form = document.getElementById('requestForm');
+    const box  = document.getElementById('availPreview');
+    if (!form || !box) return;
+
+    const refresh = () => {
+      const f = form;
+      const sd = f.start_date.value, st = f.start_time.value;
+      const ed = f.end_date.value,   et = f.end_time.value;
+      const pa = Number(f.passengers.value || 0) || 0;
+      const typePref = f.vehicle_type_pref.value || '';
+      if (!sd || !st || !ed || !et) {
+        box.innerHTML = Views.availPreview({ status: 'empty' });
+        return;
+      }
+      const startIso = sd + 'T' + st + ':00+07:00';
+      const endIso   = ed + 'T' + et + ':00+07:00';
+      if (new Date(endIso) <= new Date(startIso)) {
+        box.innerHTML = Views.availPreview({ status: 'error', message: 'เวลาสิ้นสุดต้องหลังเวลาเริ่ม' });
+        return;
+      }
+      box.innerHTML = Views.availPreview({ status: 'loading' });
+      const token = ++_availReqToken;
+      api('vehicle.availabilityCheck', {
+        start_datetime: startIso, end_datetime: endIso,
+        min_seats: pa > 0 ? pa : 0,
+        excludeRequestId: excludeRequestId || ''
+      }, { silent: true }).then(items => {
+        if (token !== _availReqToken) return;  // newer request in flight
+        box.innerHTML = Views.availPreview({ status: 'ok', items: items || [], typePref });
+      }).catch(e => {
+        if (token !== _availReqToken) return;
+        box.innerHTML = Views.availPreview({ status: 'error', message: e.message || 'ตรวจสอบไม่ได้' });
+      });
+    };
+
+    const debounced = () => {
+      if (_availDebounce) clearTimeout(_availDebounce);
+      _availDebounce = setTimeout(refresh, 450);
+    };
+
+    ['start_date', 'start_time', 'end_date', 'end_time', 'passengers', 'vehicle_type_pref'].forEach(n => {
+      const el = form[n];
+      if (!el) return;
+      el.addEventListener('change', debounced);
+      el.addEventListener('input',  debounced);
+    });
+
+    // Initial attempt (edit mode may pre-populate everything)
+    setTimeout(refresh, 200);
+  }
+
+  async function pageRequestEdit(id) {
+    titleEl().textContent = 'แก้ไขคำขอ';
+    await ensureLookup();
+    loader.show();
+    try {
+      const data = await api('request.get', { id });
+      const r = data.request;
+      // Prefill form using the same template then fill via JS
+      pageEl().innerHTML = Views.requestCreate({ me: State.user, vehicleTypes: (State.lookup || {}).vehicleTypes || [] });
+      const f = document.getElementById('requestForm');
+      if (f) {
+        f.purpose.value = r.purpose || '';
+        f.description.value = r.description || '';
+        if (r.start_datetime) {
+          const s = new Date(r.start_datetime);
+          f.start_date.value = s.toISOString().slice(0, 10);
+          f.start_time.value = s.toTimeString().slice(0, 5);
+        }
+        if (r.end_datetime) {
+          const e = new Date(r.end_datetime);
+          f.end_date.value = e.toISOString().slice(0, 10);
+          f.end_time.value = e.toTimeString().slice(0, 5);
+        }
+        f.origin.value = r.origin || '';
+        f.destination.value = r.destination || '';
+        f.passengers.value = r.passengers || 1;
+        f.vehicle_type_pref.value = r.vehicle_type_pref || '';
+        f.contact.value = r.contact || '';
+        // hidden id
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden'; hidden.name = 'id'; hidden.value = id;
+        f.appendChild(hidden);
+      }
+      document.getElementById('submitRequest').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> บันทึกการแก้ไข';
+      document.getElementById('submitRequest').addEventListener('click', () => handleRequestSubmit(id));
+      _wireAvailPreview(id);
+    } finally { loader.hide(); }
+  }
+
+  async function handleRequestSubmit(editId) {
+    const f = document.getElementById('requestForm');
+    if (!f.reportValidity()) return;
+    const payload = {
+      id: editId || null,
+      purpose: f.purpose.value.trim(),
+      description: f.description.value.trim(),
+      start_date: f.start_date.value,
+      start_time: f.start_time.value,
+      end_date: f.end_date.value,
+      end_time: f.end_time.value,
+      origin: f.origin.value.trim(),
+      destination: f.destination.value.trim(),
+      passengers: Number(f.passengers.value || 0),
+      vehicle_type_pref: f.vehicle_type_pref.value,
+      contact: f.contact.value.trim()
+    };
+    loader.show();
+    try {
+      const r = editId ? await api('request.update', payload) : await api('request.create', payload);
+      toast.success(editId ? 'บันทึกการแก้ไขแล้ว' : 'ส่งคำขอเรียบร้อยแล้ว');
+      if (r && r.id) {
+        location.hash = '#/request/view/' + r.id;
+      } else {
+        // server returned without id — go back to list
+        location.hash = '#/requests/mine';
+      }
+    } catch (e) {
+      console.error('[request submit] failed:', e);
+      toast.error(e.message || 'ไม่สามารถบันทึกได้');
+    } finally { loader.hide(); }
+  }
+
+  /* ---- Request view (detail) ---- */
+  async function pageRequestView(id) {
+    titleEl().textContent = 'รายละเอียดคำขอ';
+    loader.show();
+    try {
+      const data = await api('request.get', { id });
+      data.me = State.user;
+      pageEl().innerHTML = Views.requestDetail(data);
+      wireDetailActions(data);
+    } finally { loader.hide(); }
+  }
+
+  function wireDetailActions(data) {
+    const r = data.request;
+    document.querySelectorAll('[data-act]').forEach(el => {
+      el.addEventListener('click', async () => {
+        const act = el.getAttribute('data-act');
+        if (act === 'edit')          return (location.hash = '#/request/edit/' + r.id);
+        if (act === 'cancel')        return openCancelModal(r.id);
+        if (act === 'approveL1')     return openApproveModal(r.id, 'อนุมัติ (หัวหน้าแผนก)');
+        if (act === 'reject')        return openRejectModal(r.id);
+        if (act === 'assign')        return openAssignModal(r);
+        if (act === 'tripStart')     return openTripStartModal(r, data.vehicle);
+        if (act === 'tripComplete')  return openTripCompleteModal(r, data.trip);
+      });
+    });
+  }
+
+  /* ---- Cancel ---- */
+  function openCancelModal(requestId) {
+    modal.open({
+      title: 'ยกเลิกคำขอ',
+      body: Views.cancelForm({ request_id: requestId }),
+      buttons: [
+        { label: 'ไม่ใช่', class: 'btn-ghost' },
+        {
+          label: 'ยืนยันยกเลิก', class: 'btn-danger',
+          onClick: async () => {
+            const f = document.getElementById('cancelForm');
+            const reason = f.reason.value.trim();
+            loader.show();
+            try {
+              await api('request.cancel', { id: requestId, reason });
+              toast.success('ยกเลิกคำขอแล้ว');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'ยกเลิกไม่ได้'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  /* ---- Approve L1 ---- */
+  function openApproveModal(requestId, title) {
+    modal.open({
+      title: title || 'อนุมัติ',
+      body: Views.approveForm({ request_id: requestId }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '✓ อนุมัติ', class: 'btn-success',
+          onClick: async () => {
+            const f = document.getElementById('approveForm');
+            const remark = f.remark.value.trim();
+            loader.show();
+            try {
+              await api('approval.approve', { request_id: requestId, remark });
+              toast.success('อนุมัติคำขอแล้ว');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'อนุมัติไม่ได้'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  /* ---- Reject ---- */
+  function openRejectModal(requestId) {
+    modal.open({
+      title: 'ไม่อนุมัติคำขอ',
+      body: Views.rejectForm({ request_id: requestId }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '✗ ยืนยันไม่อนุมัติ', class: 'btn-danger',
+          onClick: async () => {
+            const f = document.getElementById('rejectForm');
+            if (!f.reportValidity()) return false;
+            const reason = f.reason.value.trim();
+            loader.show();
+            try {
+              await api('approval.reject', { request_id: requestId, reason });
+              toast.success('บันทึกการไม่อนุมัติแล้ว');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'ไม่สำเร็จ'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  /* ---- Assign (L2) ---- */
+  async function openAssignModal(r) {
+    loader.show();
+    try {
+      // Two endpoints in parallel: one for filtered pick-list + one for ALL vehicles with reasons
+      const [avail, allVehicles] = await Promise.all([
+        api('vehicle.availableOn', {
+          start_datetime: r.start_datetime, end_datetime: r.end_datetime,
+          type_pref: r.vehicle_type_pref || '', min_seats: r.passengers || 1
+        }),
+        api('vehicle.availabilityCheck', {
+          start_datetime: r.start_datetime, end_datetime: r.end_datetime,
+          min_seats: r.passengers || 1,
+          excludeRequestId: r.id
+        })
+      ]);
+      modal.open({
+        title: '<i class="fa-solid fa-car-side"></i> จัดรถและคนขับ',
+        body: Views.assignForm({
+          request_id: r.id,
+          vehicles: avail.vehicles || [],
+          vehiclesAll: allVehicles || [],
+          drivers: avail.drivers || []
+        }),
+        buttons: [
+          { label: 'ยกเลิก', class: 'btn-ghost' },
+          {
+            label: '✓ ยืนยัน', class: 'btn-accent',
+            onClick: async () => {
+              const f = document.getElementById('assignForm');
+              if (!f.reportValidity()) return false;
+              const payload = {
+                request_id: r.id,
+                vehicle_id: f.vehicle_id.value,
+                driver_id: f.driver_id.value,
+                remark: f.remark.value.trim()
+              };
+              loader.show();
+              try {
+                await api('approval.assign', payload);
+                toast.success('จัดรถและคนขับเรียบร้อย');
+                modal.close();
+                routeTo();
+              } catch (e) { toast.error(e.message || 'จัดไม่ได้'); }
+              finally { loader.hide(); }
+              return false;
+            }
+          }
+        ]
+      });
+    } catch (e) {
+      toast.error(e.message || 'โหลดข้อมูลไม่สำเร็จ');
+    } finally { loader.hide(); }
+  }
+
+  /* ---- Trip start / complete ---- */
+  function openTripStartModal(r, vehicle) {
+    modal.open({
+      title: 'เริ่มการเดินทาง',
+      body: Views.tripStartForm({ request_id: r.id, vehicle: vehicle || {} }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '<i class="fa-solid fa-play"></i> เริ่ม', class: 'btn-primary',
+          onClick: async () => {
+            const f = document.getElementById('tripStartForm');
+            if (!f.reportValidity()) return false;
+            const payload = {
+              request_id: r.id,
+              start_mileage: Number(f.start_mileage.value),
+              remark: f.remark.value.trim()
+            };
+            loader.show();
+            try {
+              await api('trip.start', payload);
+              toast.success('เริ่มการเดินทาง');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'ไม่สำเร็จ'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  function openTripCompleteModal(r, trip) {
+    modal.open({
+      title: 'สิ้นสุดการเดินทาง',
+      body: Views.tripCompleteForm({ request_id: r.id, trip: trip || {} }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '<i class="fa-solid fa-flag-checkered"></i> สิ้นสุด', class: 'btn-success',
+          onClick: async () => {
+            const f = document.getElementById('tripCompleteForm');
+            if (!f.reportValidity()) return false;
+            const payload = {
+              request_id: r.id,
+              end_mileage: Number(f.end_mileage.value),
+              remark: f.remark.value.trim()
+            };
+            loader.show();
+            try {
+              await api('trip.complete', payload);
+              toast.success('บันทึกการเดินทางสำเร็จ');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'ไม่สำเร็จ'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  /* ---- Approval inbox ---- */
+  async function pageApproval() {
+    titleEl().textContent = 'คิวอนุมัติ';
+    loader.show();
+    try {
+      const data = await api('approval.pending');
+      pageEl().innerHTML = Views.approvalInbox({ items: data.items, roleHint: data.roleHint });
+      document.querySelectorAll('#approvalTable tr.clickable').forEach(tr => {
+        tr.addEventListener('click', () => { location.hash = '#/request/view/' + tr.getAttribute('data-id'); });
+      });
+    } finally { loader.hide(); }
+  }
+
+  /* ---- Driver trips ---- */
+  async function pageTrips() {
+    titleEl().textContent = 'งานขับรถของฉัน';
+    loader.show();
+    try {
+      const data = await api('trip.myTasks');
+      pageEl().innerHTML = Views.tripTasks({ items: data.items });
+      document.querySelectorAll('#tripTable tr.clickable').forEach(tr => {
+        tr.addEventListener('click', () => { location.hash = '#/request/view/' + tr.getAttribute('data-id'); });
+      });
+    } finally { loader.hide(); }
+  }
+
+  /* ---- Calendar ---- */
+  // Cache to avoid re-fetching when filter/view changes
+  let _calCache = [];
+  let _calFilter = '';        // '' | pending | approved | ...
+  let _calView = 'month';     // 'month' | 'list'
+
+  /* ---- Schedule (vehicle availability timeline) ---- */
+  let _schState = { from: '', to: '' };
+  async function pageSchedule() {
+    titleEl().textContent = 'ตารางการใช้รถ';
+    if (!_schState.from) {
+      const now = new Date();
+      const end = new Date(now.getTime() + 13 * 86400000);
+      _schState.from = now.toISOString().slice(0, 10);
+      _schState.to   = end.toISOString().slice(0, 10);
+    }
+    const data = await api('vehicle.schedule', { from: _schState.from, to: _schState.to });
+    pageEl().innerHTML = Views.schedule({
+      from: _schState.from, to: _schState.to,
+      vehicles: data.vehicles || [], range: data.range || {}
+    });
+    _wireSchedule();
+  }
+
+  function _wireSchedule() {
+    const fromEl = document.getElementById('schFrom');
+    const toEl   = document.getElementById('schTo');
+    const apply  = document.getElementById('btnSchApply');
+    if (apply) apply.addEventListener('click', () => {
+      _schState = { from: fromEl.value, to: toEl.value };
+      pageSchedule();
+    });
+    // quick presets
+    document.querySelectorAll('[data-sch-preset]').forEach(b => {
+      b.addEventListener('click', () => {
+        const p = b.getAttribute('data-sch-preset');
+        const now = new Date();
+        let f = new Date(now), t = new Date(now);
+        if (p === '7d')  { t.setDate(t.getDate() + 6); }
+        if (p === '14d') { t.setDate(t.getDate() + 13); }
+        if (p === '30d') { t.setDate(t.getDate() + 29); }
+        if (p === 'month') {
+          f = new Date(now.getFullYear(), now.getMonth(), 1);
+          t = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        }
+        _schState.from = f.toISOString().slice(0, 10);
+        _schState.to   = t.toISOString().slice(0, 10);
+        pageSchedule();
+      });
+    });
+    // booking click → request detail
+    document.querySelectorAll('.sch-bar').forEach(el =>
+      el.addEventListener('click', () => {
+        const id = el.getAttribute('data-id');
+        if (id) location.hash = '#/request/view/' + id;
+      })
+    );
+  }
+
+  async function pageCalendar() {
+    titleEl().textContent = 'ปฏิทินใช้รถ';
+    loader.show();
+    try {
+      const { year, month } = State.calendar;
+      const data = await api('report.calendar', { year, month });
+      _calCache = data.events || [];
+      _renderCalendar();
+    } finally { loader.hide(); }
+  }
+
+  function _renderCalendar() {
+    const { year, month } = State.calendar;
+    const filtered = _calFilter
+      ? _calCache.filter(ev => {
+          if (_calFilter === 'pending') return ev.status === 'pending' || ev.status === 'approved_l1';
+          return ev.status === _calFilter;
+        })
+      : _calCache;
+    pageEl().innerHTML = Views.calendar({
+      year, month,
+      events: filtered,
+      allEvents: _calCache,
+      filter: _calFilter,
+      view: _calView
+    });
+    _wireCalendar();
+  }
+
+  function _wireCalendar() {
+    // month ± navigation (supports both old .cal-nav [data-nav] and new [data-cal-nav])
+    document.querySelectorAll('[data-cal-nav], .cal-nav [data-nav]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const delta = Number(btn.getAttribute('data-cal-nav') || btn.getAttribute('data-nav'));
+        let y = State.calendar.year, m = State.calendar.month + delta;
+        if (m < 1)  { m = 12; y--; }
+        if (m > 12) { m = 1;  y++; }
+        State.calendar = { year: y, month: m };
+        pageCalendar();
+      });
+    });
+
+    // jump to today
+    const todayBtn = document.getElementById('calToday');
+    if (todayBtn) todayBtn.addEventListener('click', () => {
+      const now = new Date();
+      State.calendar = { year: now.getFullYear(), month: now.getMonth() + 1 };
+      pageCalendar();
+    });
+
+    // month / year select
+    const monthSel = document.getElementById('calMonthSel');
+    const yearSel  = document.getElementById('calYearSel');
+    const onJump = () => {
+      State.calendar = {
+        year:  Number(yearSel.value)  || State.calendar.year,
+        month: Number(monthSel.value) || State.calendar.month
+      };
+      pageCalendar();
+    };
+    if (monthSel) monthSel.addEventListener('change', onJump);
+    if (yearSel)  yearSel.addEventListener('change', onJump);
+
+    // view switch (month / list)
+    document.querySelectorAll('[data-cal-view]').forEach(b => {
+      b.addEventListener('click', () => {
+        _calView = b.getAttribute('data-cal-view') || 'month';
+        _renderCalendar();
+      });
+    });
+
+    // status filter chips
+    document.querySelectorAll('[data-cal-filter]').forEach(b => {
+      b.addEventListener('click', () => {
+        _calFilter = b.getAttribute('data-cal-filter') || '';
+        _renderCalendar();
+      });
+    });
+
+    // print
+    const printBtn = document.getElementById('btnPrintCal');
+    if (printBtn) printBtn.addEventListener('click', () => {
+      document.body.classList.add('printing-cal');
+      setTimeout(() => {
+        window.print();
+        setTimeout(() => document.body.classList.remove('printing-cal'), 500);
+      }, 150);
+    });
+
+    // event / list click → request detail
+    const openDetail = (id) => { if (id) location.hash = '#/request/view/' + id; };
+    document.querySelectorAll('.cal-ev').forEach(a =>
+      a.addEventListener('click', () => openDetail(a.getAttribute('data-id')))
+    );
+    document.querySelectorAll('.cal-list-item').forEach(a =>
+      a.addEventListener('click', () => openDetail(a.getAttribute('data-id')))
+    );
+  }
+
+  /* ---- Vehicles ---- */
+  function _wireTableSearch(inputId, tableId) {
+    const input = document.getElementById(inputId);
+    const rows  = document.querySelectorAll('#' + tableId + ' tbody tr');
+    if (!input) return;
+    input.addEventListener('input', () => {
+      const q = (input.value || '').toLowerCase().trim();
+      rows.forEach(tr => {
+        const txt = tr.textContent.toLowerCase();
+        tr.style.display = (!q || txt.indexOf(q) >= 0) ? '' : 'none';
+      });
+    });
+  }
+
+  async function pageVehicles() {
+    titleEl().textContent = 'จัดการรถยนต์';
+    await ensureLookup();
+    loader.show();
+    try {
+      const data = await api('vehicle.list', {});
+      pageEl().innerHTML = Views.vehicles({ items: data.items });
+      document.getElementById('btnNewVehicle').addEventListener('click', () => openVehicleModal(null));
+      document.querySelectorAll('#vehicleTable [data-act="edit"]').forEach(b =>
+        b.addEventListener('click', () => openVehicleModal(b.getAttribute('data-id'))));
+      document.querySelectorAll('#vehicleTable [data-act="delete"]').forEach(b =>
+        b.addEventListener('click', () => deleteVehicle(b.getAttribute('data-id'))));
+      _wireTableSearch('vehicleSearch', 'vehicleTable');
+    } finally { loader.hide(); }
+  }
+
+  async function openVehicleModal(id) {
+    const lu = State.lookup || {};
+    let vehicle = {};
+    if (id) {
+      loader.show();
+      try { vehicle = await api('vehicle.get', { id }) || {}; }
+      catch (e) { toast.error(e.message); return; }
+      finally { loader.hide(); }
+    }
+    modal.open({
+      title: id ? 'แก้ไขรถ' : 'เพิ่มรถใหม่',
+      body: Views.vehicleForm({ vehicle, types: lu.vehicleTypes, statuses: lu.vehicleStatuses }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '<i class="fa-solid fa-floppy-disk"></i> บันทึก', class: 'btn-primary',
+          onClick: async () => {
+            const f = document.getElementById('vehicleForm');
+            if (!f.reportValidity()) return false;
+            const payload = {};
+            new FormData(f).forEach((v, k) => payload[k] = v);
+            loader.show();
+            try {
+              await api('vehicle.save', payload);
+              toast.success('บันทึกแล้ว');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'บันทึกไม่ได้'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  async function deleteVehicle(id) {
+    if (!(await confirmDialog('ลบรถคันนี้? จะไม่สามารถกู้คืนได้'))) return;
+    loader.show();
+    try { await api('vehicle.delete', { id }); toast.success('ลบแล้ว'); routeTo(); }
+    catch (e) { toast.error(e.message || 'ลบไม่ได้'); }
+    finally { loader.hide(); }
+  }
+
+  /* ---- Drivers ---- */
+  async function pageDrivers() {
+    titleEl().textContent = 'จัดการคนขับ';
+    loader.show();
+    try {
+      const data = await api('driver.list', {});
+      pageEl().innerHTML = Views.drivers({ items: data.items });
+      document.getElementById('btnNewDriver').addEventListener('click', () => openDriverModal(null));
+      document.querySelectorAll('#driverTable [data-act="edit"]').forEach(b =>
+        b.addEventListener('click', () => openDriverModal(b.getAttribute('data-id'))));
+      document.querySelectorAll('#driverTable [data-act="delete"]').forEach(b =>
+        b.addEventListener('click', () => deleteDriver(b.getAttribute('data-id'))));
+      _wireTableSearch('driverSearch', 'driverTable');
+    } finally { loader.hide(); }
+  }
+
+  async function openDriverModal(id) {
+    let driver = {};
+    const users = (State.lookup || {}).driverCandidates || [];
+    if (id) {
+      loader.show();
+      try { driver = await api('driver.get', { id }) || {}; }
+      catch (e) { toast.error(e.message); return; }
+      finally { loader.hide(); }
+    }
+    modal.open({
+      title: id ? 'แก้ไขคนขับ' : 'เพิ่มคนขับใหม่',
+      body: Views.driverForm({ driver, users }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '<i class="fa-solid fa-floppy-disk"></i> บันทึก', class: 'btn-primary',
+          onClick: async () => {
+            const f = document.getElementById('driverForm');
+            if (!f.reportValidity()) return false;
+            const payload = {};
+            new FormData(f).forEach((v, k) => payload[k] = v);
+            loader.show();
+            try {
+              await api('driver.save', payload);
+              toast.success('บันทึกแล้ว');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'บันทึกไม่ได้'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  async function deleteDriver(id) {
+    if (!(await confirmDialog('ลบคนขับรายนี้?'))) return;
+    loader.show();
+    try { await api('driver.delete', { id }); toast.success('ลบแล้ว'); routeTo(); }
+    catch (e) { toast.error(e.message || 'ลบไม่ได้'); }
+    finally { loader.hide(); }
+  }
+
+  /* ---- Fuel ---- */
+  async function pageFuel() {
+    titleEl().textContent = 'บันทึกเติมน้ำมัน';
+    await ensureLookup();
+    loader.show();
+    try {
+      const data = await api('fuel.list', {});
+      pageEl().innerHTML = Views.fuel({ items: data.items });
+      document.getElementById('btnNewFuel').addEventListener('click', () => openFuelModal());
+      document.querySelectorAll('#fuelTable [data-act="delete"]').forEach(b =>
+        b.addEventListener('click', () => deleteFuel(b.getAttribute('data-id'))));
+    } finally { loader.hide(); }
+  }
+
+  function openFuelModal() {
+    const vehicles = (State.lookup || {}).vehiclesAll || [];
+    modal.open({
+      title: 'บันทึกเติมน้ำมัน',
+      body: Views.fuelForm({ vehicles }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '<i class="fa-solid fa-floppy-disk"></i> บันทึก', class: 'btn-primary',
+          onClick: async () => {
+            const f = document.getElementById('fuelForm');
+            if (!f.reportValidity()) return false;
+            const payload = {};
+            new FormData(f).forEach((v, k) => payload[k] = v);
+            payload.liters = Number(payload.liters || 0);
+            payload.price_per_liter = Number(payload.price_per_liter || 0);
+            payload.mileage = Number(payload.mileage || 0);
+            loader.show();
+            try {
+              await api('fuel.save', payload);
+              toast.success('บันทึกแล้ว');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'บันทึกไม่ได้'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  async function deleteFuel(id) {
+    if (!(await confirmDialog('ลบรายการนี้?'))) return;
+    loader.show();
+    try { await api('fuel.delete', { id }); toast.success('ลบแล้ว'); routeTo(); }
+    catch (e) { toast.error(e.message); }
+    finally { loader.hide(); }
+  }
+
+  /* ---- Maintenance ---- */
+  async function pageMaint() {
+    titleEl().textContent = 'ซ่อมบำรุง';
+    await ensureLookup();
+    loader.show();
+    try {
+      const data = await api('maint.list', {});
+      pageEl().innerHTML = Views.maint({ items: data.items });
+      document.getElementById('btnNewMaint').addEventListener('click', () => openMaintModal());
+      document.querySelectorAll('#maintTable [data-act="delete"]').forEach(b =>
+        b.addEventListener('click', () => deleteMaint(b.getAttribute('data-id'))));
+    } finally { loader.hide(); }
+  }
+
+  function openMaintModal() {
+    const vehicles = (State.lookup || {}).vehiclesAll || [];
+    modal.open({
+      title: 'บันทึกซ่อมบำรุง',
+      body: Views.maintForm({ vehicles }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '<i class="fa-solid fa-floppy-disk"></i> บันทึก', class: 'btn-primary',
+          onClick: async () => {
+            const f = document.getElementById('maintForm');
+            if (!f.reportValidity()) return false;
+            const payload = {};
+            new FormData(f).forEach((v, k) => payload[k] = v);
+            payload.cost = Number(payload.cost || 0);
+            payload.mileage = Number(payload.mileage || 0);
+            loader.show();
+            try {
+              await api('maint.save', payload);
+              toast.success('บันทึกแล้ว');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'บันทึกไม่ได้'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  async function deleteMaint(id) {
+    if (!(await confirmDialog('ลบรายการนี้?'))) return;
+    loader.show();
+    try { await api('maint.delete', { id }); toast.success('ลบแล้ว'); routeTo(); }
+    catch (e) { toast.error(e.message); }
+    finally { loader.hide(); }
+  }
+
+  /* ---- Users ---- */
+  async function pageUsers() {
+    titleEl().textContent = 'จัดการผู้ใช้งาน';
+    await ensureLookup();
+    loader.show();
+    try {
+      const data = await api('user.list', {});
+      pageEl().innerHTML = Views.users({ items: data.items });
+      document.getElementById('btnNewUser').addEventListener('click', () => openUserModal(null));
+      document.querySelectorAll('#userTable [data-act="edit"]').forEach(b =>
+        b.addEventListener('click', () => openUserModal(b.getAttribute('data-id'))));
+      document.querySelectorAll('#userTable [data-act="delete"]').forEach(b =>
+        b.addEventListener('click', () => deleteUser(b.getAttribute('data-id'))));
+      _wireTableSearch('userSearch', 'userTable');
+    } finally { loader.hide(); }
+  }
+
+  async function openUserModal(id) {
+    let user = {};
+    const roles = (State.lookup || {}).roles || [];
+    if (id) {
+      loader.show();
+      try { user = await api('user.get', { id }) || {}; }
+      catch (e) { toast.error(e.message); return; }
+      finally { loader.hide(); }
+    }
+    modal.open({
+      title: id ? 'แก้ไขผู้ใช้' : 'เพิ่มผู้ใช้ใหม่',
+      body: Views.userForm({ user, roles }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '<i class="fa-solid fa-floppy-disk"></i> บันทึก', class: 'btn-primary',
+          onClick: async () => {
+            const f = document.getElementById('userForm');
+            if (!f.reportValidity()) return false;
+            const payload = {};
+            new FormData(f).forEach((v, k) => payload[k] = v);
+            if (!payload.password) delete payload.password;
+            loader.show();
+            try {
+              await api('user.save', payload);
+              toast.success('บันทึกแล้ว');
+              modal.close();
+              routeTo();
+            } catch (e) { toast.error(e.message || 'บันทึกไม่ได้'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  async function deleteUser(id) {
+    if (!(await confirmDialog('ลบผู้ใช้รายนี้? จะไม่สามารถกู้คืนได้'))) return;
+    loader.show();
+    try { await api('user.delete', { id }); toast.success('ลบแล้ว'); routeTo(); }
+    catch (e) { toast.error(e.message); }
+    finally { loader.hide(); }
+  }
+
+  /* ---- Reports ---- */
+  let _rptChart = null;
+  let _rptSortBy = null;  // {key, dir: 'asc'|'desc'}
+
+  async function pageReports() {
+    titleEl().textContent = 'รายงาน';
+    pageEl().innerHTML = Views.reports({});
+    _wireReportsControls();
+  }
+
+  function _wireReportsControls() {
+    // Type cards → select
+    document.querySelectorAll('[data-rpt-type]').forEach(c => {
+      c.addEventListener('click', () => {
+        document.querySelectorAll('[data-rpt-type]').forEach(x => x.classList.remove('active'));
+        c.classList.add('active');
+        document.getElementById('reportType').value = c.getAttribute('data-rpt-type');
+      });
+    });
+
+    // Preset date buttons
+    document.querySelectorAll('[data-preset]').forEach(b => {
+      b.addEventListener('click', () => {
+        document.querySelectorAll('[data-preset]').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        const p = b.getAttribute('data-preset');
+        const now = new Date();
+        let from, to;
+        if (p === '7d') {
+          to = now; from = new Date(); from.setDate(from.getDate() - 6);
+        } else if (p === '30d') {
+          to = now; from = new Date(); from.setDate(from.getDate() - 29);
+        } else if (p === 'month') {
+          from = new Date(now.getFullYear(), now.getMonth(), 1);
+          to   = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        } else if (p === 'quarter') {
+          const q = Math.floor(now.getMonth() / 3);
+          from = new Date(now.getFullYear(), q * 3, 1);
+          to   = new Date(now.getFullYear(), q * 3 + 3, 0);
+        } else if (p === 'year') {
+          from = new Date(now.getFullYear(), 0, 1);
+          to   = new Date(now.getFullYear(), 11, 31);
+        }
+        if (from && to) {
+          document.getElementById('reportFrom').value = from.toISOString().slice(0, 10);
+          document.getElementById('reportTo').value   = to.toISOString().slice(0, 10);
+        }
+      });
+    });
+
+    // When user edits date directly, unmark presets
+    ['reportFrom', 'reportTo'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', () => {
+        document.querySelectorAll('[data-preset]').forEach(x => x.classList.remove('active'));
+      });
+    });
+
+    // Clear
+    const clearBtn = document.getElementById('btnClearRpt');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      pageReports();
+    });
+
+    // Run
+    document.getElementById('btnRunReport').addEventListener('click', runReport);
+  }
+
+  async function runReport() {
+    const type = document.getElementById('reportType').value;
+    const from = document.getElementById('reportFrom').value;
+    const to   = document.getElementById('reportTo').value;
+    try {
+      const act = 'report.' + type;
+      const data = await api(act, { from, to });
+      State.reportLast = data;
+      _rptSortBy = null;
+      document.getElementById('reportOutput').innerHTML = Views.reportTable(data);
+      _wireReportResult(data);
+    } catch (e) {
+      toast.error(e.message || 'โหลดรายงานไม่สำเร็จ');
+    }
+  }
+
+  function _wireReportResult(data) {
+    // Export CSV
+    const exp = document.getElementById('btnExportCsv');
+    if (exp) exp.addEventListener('click', () => exportReportCsv(data));
+
+    // Print
+    const pr = document.getElementById('btnPrintRpt');
+    if (pr) pr.addEventListener('click', () => {
+      document.body.classList.add('printing-rpt');
+      setTimeout(() => {
+        window.print();
+        setTimeout(() => document.body.classList.remove('printing-rpt'), 500);
+      }, 150);
+    });
+
+    // Table search
+    const search = document.getElementById('rptSearch');
+    if (search) search.addEventListener('input', () => {
+      const q = (search.value || '').toLowerCase().trim();
+      document.querySelectorAll('#reportTbl tbody tr').forEach(tr => {
+        const t = tr.textContent.toLowerCase();
+        tr.style.display = (!q || t.indexOf(q) >= 0) ? '' : 'none';
+      });
+    });
+
+    // Sortable headers
+    document.querySelectorAll('#reportTbl thead th .rpt-th-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const th = btn.closest('th');
+        const key = th.getAttribute('data-col');
+        const fmt = th.getAttribute('data-fmt') || 'text';
+        if (_rptSortBy && _rptSortBy.key === key) {
+          _rptSortBy.dir = _rptSortBy.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          _rptSortBy = { key, dir: 'asc' };
+        }
+        _rerenderSorted(data, fmt);
+      });
+    });
+
+    // Render chart (Chart.js)
+    _renderReportChart();
+  }
+
+  function _rerenderSorted(data, fmt) {
+    if (!data || !_rptSortBy) return;
+    const rows = (data.rows || []).slice();
+    const k = _rptSortBy.key;
+    const dir = _rptSortBy.dir === 'asc' ? 1 : -1;
+    rows.sort((a, b) => {
+      let va = a[k], vb = b[k];
+      if (fmt === 'num' || fmt === 'money') return ((Number(va) || 0) - (Number(vb) || 0)) * dir;
+      return String(va || '').localeCompare(String(vb || '')) * dir;
+    });
+    const copy = Object.assign({}, data, { rows });
+    document.getElementById('reportOutput').innerHTML = Views.reportTable(copy);
+    _wireReportResult(data);  // re-wire with original data
+    // reapply sort indicator
+    const th = document.querySelector('#reportTbl thead th[data-col="' + k + '"] .rpt-th-btn i');
+    if (th) { th.className = 'fa-solid fa-' + (_rptSortBy.dir === 'asc' ? 'sort-up' : 'sort-down'); }
+  }
+
+  function _renderReportChart() {
+    try { if (_rptChart) _rptChart.destroy(); } catch (e) {}
+    const el = document.getElementById('rptChart');
+    const src = document.getElementById('rptChartData');
+    if (!el || !src || typeof Chart === 'undefined') return;
+    const labels = JSON.parse(src.getAttribute('data-labels') || '[]');
+    const values = JSON.parse(src.getAttribute('data-values') || '[]');
+    const valueLabel = src.getAttribute('data-label') || '';
+    const fmt = src.getAttribute('data-format') || 'num';
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--theme-accent').trim() || '#10b981';
+    const accent2 = getComputedStyle(document.documentElement).getPropertyValue('--theme-accent-2').trim() || '#059669';
+
+    _rptChart = new Chart(el, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: valueLabel,
+          data: values,
+          backgroundColor: (ctx) => {
+            const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, 240);
+            g.addColorStop(0, accent);
+            g.addColorStop(1, accent2);
+            return g;
+          },
+          borderRadius: 8,
+          borderSkipped: false,
+          maxBarThickness: 44
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (c) => valueLabel + ': ' + (fmt === 'money'
+                ? Number(c.parsed.y).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : Number(c.parsed.y).toLocaleString('th-TH'))
+            }
+          }
+        },
+        scales: {
+          y: { beginAtZero: true, grid: { color: 'rgba(148,163,184,.18)' }, ticks: { precision: 0 } },
+          x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } }
+        }
+      }
+    });
+  }
+
+  function exportReportCsv(data) {
+    const cols = data.columns || [];
+    const rows = data.rows || [];
+    const esc = v => {
+      if (v == null) return '';
+      const s = String(v).replace(/"/g, '""');
+      return /[",\n]/.test(s) ? '"' + s + '"' : s;
+    };
+    const header = cols.map(c => esc(c.label)).join(',');
+    const body = rows.map(r => cols.map(c => esc(r[c.key])).join(',')).join('\n');
+    const csv = '\uFEFF' + header + '\n' + body; // BOM for Excel Thai
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'report-' + (data.title || 'export') + '-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  /* =====================================================================
+   *  7) Lookup cache
+   * =================================================================== */
+  async function ensureLookup() {
+    if (State.lookup) return State.lookup;
+    loader.show();
+    try {
+      const data = await api('lookup.all');
+      State.lookup = data;
+      return data;
+    } finally { loader.hide(); }
+  }
+
+  /* =====================================================================
+   *  8) Login / Logout / Change password
+   * =================================================================== */
+  function showLogin() {
+    document.getElementById('loginScreen').hidden = false;
+    document.getElementById('app').hidden = true;
+    const u = document.getElementById('loginUsername');
+    if (u) u.focus();
+  }
+  function showApp() {
+    document.getElementById('loginScreen').hidden = true;
+    document.getElementById('app').hidden = false;
+    renderUserChip();
+    buildNav();
+    startClock();
+    if (!location.hash) location.hash = '#/dashboard';
+    else routeTo();
+  }
+
+  function renderUserChip() {
+    const u = State.user || {};
+    const roleLabel = u.role_label || u.role || '—';
+    document.getElementById('userName').textContent = u.full_name || u.username || '—';
+    document.getElementById('userRole').textContent = roleLabel;
+    document.getElementById('userAvatar').textContent = (u.full_name || u.username || 'U').slice(0, 1).toUpperCase();
+    const badge = document.getElementById('sideRoleBadge');
+    if (badge) {
+      badge.textContent = roleLabel;
+      badge.setAttribute('data-role', u.role || '');
+    }
+  }
+
+  async function doLogin(username, password) {
+    loader.show();
+    try {
+      const data = await api('login', { username, password });
+      State.token = data.token;
+      State.user = data.user;
+      saveSession();
+      toast.success('ยินดีต้อนรับ ' + (data.user.full_name || data.user.username));
+      showApp();
+    } catch (e) {
+      const el = document.getElementById('loginError');
+      el.textContent = e.message || 'เข้าสู่ระบบไม่สำเร็จ';
+      el.hidden = false;
+    } finally { loader.hide(); }
+  }
+
+  async function doLogout() {
+    try { await api('logout'); } catch (e) { /* ignore */ }
+    clearSession();
+    location.hash = '';
+    showLogin();
+    toast.info('ออกจากระบบแล้ว');
+  }
+
+  function openChangePasswordModal() {
+    modal.open({
+      title: 'เปลี่ยนรหัสผ่าน',
+      body: Views.changePasswordForm(),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '<i class="fa-solid fa-floppy-disk"></i> บันทึก', class: 'btn-primary',
+          onClick: async () => {
+            const f = document.getElementById('passForm');
+            if (!f.reportValidity()) return false;
+            if (f.newPass.value !== f.confirmPass.value) {
+              toast.warn('รหัสผ่านใหม่กับยืนยันไม่ตรงกัน');
+              return false;
+            }
+            loader.show();
+            try {
+              await api('user.changePass', { oldPass: f.oldPass.value, newPass: f.newPass.value });
+              toast.success('เปลี่ยนรหัสผ่านแล้ว');
+              modal.close();
+            } catch (e) { toast.error(e.message || 'เปลี่ยนไม่ได้'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+  }
+
+  /* =====================================================================
+   *  9) Wire initial events
+   * =================================================================== */
+  function wireLoginScreen() {
+    const btn = document.getElementById('loginBtn');
+    const userEl = document.getElementById('loginUsername');
+    const passEl = document.getElementById('loginPassword');
+    const errEl  = document.getElementById('loginError');
+    const rememberEl = document.getElementById('loginRemember');
+    const REMEMBER_KEY = 'vbs.rememberUser';
+
+    // Submit handler (same flow as before: validate → doLogin)
+    const submit = async () => {
+      const u = (userEl.value || '').trim();
+      const p = passEl.value || '';
+      if (!u || !p) {
+        errEl.textContent = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน';
+        errEl.hidden = false;
+        return;
+      }
+      errEl.hidden = true;
+      // persist username if remember-me on
+      try {
+        if (rememberEl && rememberEl.checked) localStorage.setItem(REMEMBER_KEY, u);
+        else localStorage.removeItem(REMEMBER_KEY);
+      } catch (e) { /* ignore */ }
+      // visual loading
+      btn.classList.add('is-loading');
+      btn.disabled = true;
+      try { await doLogin(u, p); }
+      finally {
+        btn.classList.remove('is-loading');
+        btn.disabled = false;
+      }
+    };
+    btn.addEventListener('click', submit);
+
+    // Enter to submit
+    [userEl, passEl].forEach(el => {
+      el.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+    });
+
+    // Password visibility toggle
+    const toggleBtn = document.getElementById('loginPassToggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        const visible = passEl.type === 'text';
+        passEl.type = visible ? 'password' : 'text';
+        toggleBtn.classList.toggle('is-visible', !visible);
+        const iconEl = toggleBtn.querySelector('.eye-icon');
+        if (iconEl) {
+          iconEl.classList.remove('fa-eye', 'fa-eye-slash');
+          iconEl.classList.add(visible ? 'fa-eye' : 'fa-eye-slash');
+        }
+        passEl.focus();
+      });
+    }
+
+    // CapsLock indicator on password field
+    const capsEl = document.getElementById('loginCapslock');
+    const checkCaps = (e) => {
+      if (!capsEl || !e.getModifierState) return;
+      capsEl.hidden = !e.getModifierState('CapsLock');
+    };
+    passEl.addEventListener('keydown', checkCaps);
+    passEl.addEventListener('keyup', checkCaps);
+    passEl.addEventListener('blur', () => { if (capsEl) capsEl.hidden = true; });
+
+    // Forgot link → hint modal (no backend change)
+    const forgot = document.getElementById('loginForgot');
+    if (forgot) forgot.addEventListener('click', () => {
+      modal.open({
+        title: '<i class="fa-solid fa-key"></i> ลืมรหัสผ่าน',
+        body: '<p>กรุณาติดต่อผู้ดูแลระบบ (Admin) เพื่อขอรีเซ็ตรหัสผ่าน</p><p class="muted" style="margin-top:8px">อีเมลผู้ดูแลระบบจะแจ้งให้ทราบพร้อมรหัสผ่านชั่วคราวภายใน 1 วันทำการ</p>',
+        buttons: [{ label: 'เข้าใจแล้ว', class: 'btn-primary' }]
+      });
+    });
+
+    // test account chips (keep existing data-user / data-pass contract)
+    document.querySelectorAll('.login-chip, .login-hint-grid .chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        userEl.value = chip.getAttribute('data-user') || '';
+        passEl.value = chip.getAttribute('data-pass') || '';
+        userEl.focus();
+      });
+    });
+
+    // Restore remembered username
+    try {
+      const saved = localStorage.getItem(REMEMBER_KEY);
+      if (saved) {
+        userEl.value = saved;
+        if (rememberEl) rememberEl.checked = true;
+        passEl.focus();
+      } else {
+        userEl.focus();
+      }
+    } catch (e) { /* ignore */ }
+  }
+  function wireAppShell() {
+    document.getElementById('logoutBtn').addEventListener('click', doLogout);
+    document.getElementById('changePassBtn').addEventListener('click', openChangePasswordModal);
+    document.getElementById('hamburger').addEventListener('click', () => {
+      document.querySelector('.sidebar').classList.toggle('open');
+    });
+    window.addEventListener('hashchange', routeTo);
+
+    // Intercept in-app hash links so <base target="_top"> doesn't navigate
+    // the parent window to the iframe URL (googleusercontent.com/...#/...).
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest && e.target.closest('a[href^="#"]');
+      if (!a) return;
+      const href = a.getAttribute('href');
+      if (!href || href === '#') return;
+      e.preventDefault();
+      if (location.hash === href) routeTo();
+      else location.hash = href;
+    });
+  }
+
+  async function bootstrap() {
+    wireLoginScreen();
+    wireAppShell();
+    // try restore session
+    const saved = loadSession();
+    if (saved && saved.token) {
+      State.token = saved.token;
+      State.user = saved.user;
+      loader.show();
+      try {
+        const me = await api('me');
+        State.user = me;
+        saveSession();
+        showApp();
+      } catch (e) {
+        clearSession();
+        showLogin();
+      } finally { loader.hide(); }
+    } else {
+      showLogin();
+    }
+  }
+
+  // export for debug
+  window.App = { State, api, routeTo, loader };
+  document.addEventListener('DOMContentLoaded', bootstrap);
+})();
+</script>
