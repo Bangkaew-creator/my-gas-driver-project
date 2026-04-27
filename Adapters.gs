@@ -247,7 +247,7 @@ function Adapter_dashboardOut(d) {
   const ds = d.driverStats || {};
   const stats = {
     totalRequests:     d.totalRequests || 0,
-    pending:           (bs[REQUEST_STATUS.PENDING] || 0) + (bs[REQUEST_STATUS.APPROVED_L1] || 0),
+    pending:           (bs[REQUEST_STATUS.PENDING] || 0) + (bs[REQUEST_STATUS.APPROVED_L1] || 0) + (bs[REQUEST_STATUS.APPROVED_L2] || 0),
     approved:          bs[REQUEST_STATUS.APPROVED]     || 0,
     inProgress:        bs[REQUEST_STATUS.IN_PROGRESS]  || 0,
     completed:         bs[REQUEST_STATUS.COMPLETED]    || 0,

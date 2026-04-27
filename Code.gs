@@ -110,12 +110,7 @@ function api(action, token, payload) {
         requestId: payload.request_id || payload.requestId,
         comment:   payload.reason || payload.remark || payload.comment || ''
       });
-      case 'approval.assign':   return Approval_assign(session, {
-        requestId: payload.request_id || payload.requestId,
-        vehicleId: payload.vehicle_id || payload.vehicleId,
-        driverId:  payload.driver_id  || payload.driverId,
-        comment:   payload.remark || payload.comment || ''
-      });
+      case 'approval.assign':   return Approval_assign();
 
       case 'approval.history': {
         const r = Approval_history(session, payload.requestId);
@@ -151,7 +146,7 @@ function api(action, token, payload) {
           const ms = Number(payload.min_seats) || 0;
           if (ms > 0) vehicles = vehicles.filter(v => (Number(v.seats) || 0) >= ms);
         }
-        const drivers = _availableDrivers(payload.start_datetime, payload.end_datetime).map(Adapter_driverOut);
+        const drivers = _availableDrivers(session, payload.start_datetime, payload.end_datetime).map(Adapter_driverOut);
         return ok({ vehicles: vehicles, drivers: drivers });
       }
 
@@ -342,25 +337,23 @@ function _serializeReplacer_(key, value) {
  *  ใช้แสดงบน "คิวอนุมัติของฉัน"
  */
 function _approvalRoleHint(session) {
-  const isL1 = Auth_isApprover(session) || Auth_isAdmin(session);
-  const isL2 = Auth_isManager(session)  || Auth_isAdmin(session);
-  if (isL1 && isL2) return 'ผู้อนุมัติขั้น 1 + ผู้จัดสรรรถ';
-  if (isL1)        return 'ผู้อนุมัติขั้น 1 (หัวหน้าแผนก)';
-  if (isL2)        return 'ผู้จัดสรรรถ (ขั้น 2)';
-  return '';
+  return Approval_roleHint(session);
 }
 
 /**
  * หาคนขับที่ว่างในช่วงเวลา (ISO string)
  *  - คัดออก: คนขับที่มีคำขอสถานะ APPROVED หรือ IN_PROGRESS ซ้อนช่วงเวลา
  */
-function _availableDrivers(startISO, endISO) {
-  if (!startISO || !endISO) return DB_findAll(SHEETS.DRIVERS).filter(d => d.status === 'active');
+function _availableDrivers(session, startISO, endISO) {
+  var allDrivers = DB_findAll(SHEETS.DRIVERS).filter(function(d) { return d.status === 'active'; });
+  // Division scoping: กรองเฉพาะคนขับของกองตัวเอง (และคนขับที่ไม่ผูกกอง)
+  if (!Auth_canSeeAllDivisions(session) && session && session.division_id) {
+    allDrivers = allDrivers.filter(function(d) { return !d.division_id || d.division_id === session.division_id; });
+  }
+  if (!startISO || !endISO) return allDrivers;
   const start = new Date(startISO);
   const end   = new Date(endISO);
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    return DB_findAll(SHEETS.DRIVERS).filter(d => d.status === 'active');
-  }
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return allDrivers;
 
   const activeReqs = DB_findAll(SHEETS.REQUESTS).filter(r =>
     r.status === REQUEST_STATUS.APPROVED ||
@@ -376,9 +369,7 @@ function _availableDrivers(startISO, endISO) {
     if (Utils_rangesOverlap(start, end, rs, re)) busyDriverIds[r.driver_id] = true;
   });
 
-  return DB_findAll(SHEETS.DRIVERS).filter(d =>
-    d.status === 'active' && !busyDriverIds[d.id]
-  );
+  return allDrivers.filter(d => !busyDriverIds[d.id]);
 }
 
 /**

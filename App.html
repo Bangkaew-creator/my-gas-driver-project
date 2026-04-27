@@ -718,45 +718,95 @@
     _wireAvailPreview();
   }
 
-  /* Vehicle availability preview on request form
-   *  — ดูรถว่าง/ไม่ว่างตามวัน-เวลาและจำนวนผู้โดยสารที่เลือก
-   *  — debounced so we don't spam the server while user is typing
-   */
+  /* โหลดรถ/คนขับที่ว่างลง SELECT เมื่อวันเวลาเปลี่ยน — debounced */
   let _availDebounce = null;
   let _availReqToken = 0;
   function _wireAvailPreview(excludeRequestId) {
     const form = document.getElementById('requestForm');
-    const box  = document.getElementById('availPreview');
-    if (!form || !box) return;
+    if (!form) return;
+    const vSel    = document.getElementById('vehicleSelect');
+    const dSel    = document.getElementById('driverSelect');
+    const vHint   = document.getElementById('vehicleHint');
+    const dHint   = document.getElementById('driverHint');
+    const statusEl= document.getElementById('availStatus');
+    if (!vSel || !dSel) return;
+
+    const setMsg = (msg, isErr) => {
+      if (!statusEl) return;
+      statusEl.textContent = msg;
+      statusEl.className = 'avail-status-msg' + (isErr ? ' avail-status-err' : '');
+    };
+
+    const resetSelects = (placeholder) => {
+      [vSel, dSel].forEach(s => {
+        s.innerHTML = '<option value="">' + placeholder + '</option>';
+      });
+      if (vHint) vHint.textContent = '';
+      if (dHint) dHint.textContent = '';
+    };
 
     const refresh = () => {
-      const f = form;
-      const sd = f.start_date.value, st = f.start_time.value;
-      const ed = f.end_date.value,   et = f.end_time.value;
-      const pa = Number(f.passengers.value || 0) || 0;
-      const typePref = f.vehicle_type_pref.value || '';
+      const sd = form.start_date.value, st = form.start_time.value;
+      const ed = form.end_date.value,   et = form.end_time.value;
+      const pa = Number(form.passengers.value || 1) || 1;
+      const typePref = form.vehicle_type_pref ? (form.vehicle_type_pref.value || '') : '';
       if (!sd || !st || !ed || !et) {
-        box.innerHTML = Views.availPreview({ status: 'empty' });
+        resetSelects('-- กรอกวันที่/เวลาก่อน --');
+        setMsg('');
         return;
       }
       const startIso = sd + 'T' + st + ':00+07:00';
       const endIso   = ed + 'T' + et + ':00+07:00';
       if (new Date(endIso) <= new Date(startIso)) {
-        box.innerHTML = Views.availPreview({ status: 'error', message: 'เวลาสิ้นสุดต้องหลังเวลาเริ่ม' });
+        resetSelects('-- เวลาไม่ถูกต้อง --');
+        setMsg('เวลาสิ้นสุดต้องหลังเวลาเริ่ม', true);
         return;
       }
-      box.innerHTML = Views.availPreview({ status: 'loading' });
+      // บันทึก value ปัจจุบัน (หรือ prefill จาก edit mode) ก่อน reset
+      const prevV = form.dataset.prefillVehicle || vSel.value;
+      const prevD = form.dataset.prefillDriver  || dSel.value;
+      delete form.dataset.prefillVehicle;
+      delete form.dataset.prefillDriver;
+      resetSelects('-- กำลังโหลด... --');
+      setMsg('กำลังตรวจสอบรถและคนขับที่ว่าง...');
       const token = ++_availReqToken;
       api('vehicle.availabilityCheck', {
         start_datetime: startIso, end_datetime: endIso,
-        min_seats: pa > 0 ? pa : 0,
-        excludeRequestId: excludeRequestId || ''
+        min_seats: pa, excludeRequestId: excludeRequestId || ''
       }, { silent: true }).then(items => {
-        if (token !== _availReqToken) return;  // newer request in flight
-        box.innerHTML = Views.availPreview({ status: 'ok', items: items || [], typePref });
+        if (token !== _availReqToken) return;
+        const available = (items || []).filter(v => v.available);
+        const filtered  = typePref ? available.filter(v => v.type_key === typePref) : available;
+        // populate vehicle select
+        let vHtml = '<option value="">-- เลือกรถ --</option>';
+        (filtered.length ? filtered : available).forEach(v => {
+          const label = v.plate + ' ' + v.brand + ' ' + v.model + ' (' + v.type + ', ' + (v.seats || '-') + ' ที่นั่ง)';
+          vHtml += '<option value="' + v.id + '">' + label + '</option>';
+        });
+        vSel.innerHTML = vHtml;
+        if (prevV) vSel.value = prevV;
+        if (vHint) vHint.textContent = available.length + ' คัน ว่าง' + (filtered.length !== available.length ? ' / กรองตามประเภท ' + filtered.length + ' คัน' : '');
+        // โหลดคนขับ
+        return api('vehicle.availableOn', {
+          start_datetime: startIso, end_datetime: endIso,
+          min_seats: pa, excludeRequestId: excludeRequestId || ''
+        }, { silent: true });
+      }).then(res => {
+        if (!res || token !== _availReqToken) return;
+        const drivers = (res.drivers || []);
+        let dHtml = '<option value="">-- เลือกคนขับ --</option>';
+        drivers.forEach(d => {
+          const label = d.fullname + (d.phone ? ' (' + d.phone + ')' : '');
+          dHtml += '<option value="' + d.id + '">' + label + '</option>';
+        });
+        dSel.innerHTML = dHtml;
+        if (prevD) dSel.value = prevD;
+        if (dHint) dHint.textContent = drivers.length + ' คน ว่าง';
+        setMsg('');
       }).catch(e => {
         if (token !== _availReqToken) return;
-        box.innerHTML = Views.availPreview({ status: 'error', message: e.message || 'ตรวจสอบไม่ได้' });
+        resetSelects('-- ตรวจสอบไม่ได้ --');
+        setMsg(e.message || 'ตรวจสอบสถานะรถไม่ได้', true);
       });
     };
 
@@ -802,8 +852,11 @@
         f.origin.value = r.origin || '';
         f.destination.value = r.destination || '';
         f.passengers.value = r.passengers || 1;
-        f.vehicle_type_pref.value = r.vehicle_type_pref || '';
+        if (f.vehicle_type_pref) f.vehicle_type_pref.value = r.vehicle_type_pref || '';
         f.contact.value = r.contact || '';
+        // เก็บ vehicle/driver ไว้ prefill หลัง select โหลดเสร็จ
+        f.dataset.prefillVehicle = r.vehicle_id || '';
+        f.dataset.prefillDriver  = r.driver_id  || '';
         // hidden id
         const hidden = document.createElement('input');
         hidden.type = 'hidden'; hidden.name = 'id'; hidden.value = id;
@@ -829,8 +882,10 @@
       origin: f.origin.value.trim(),
       destination: f.destination.value.trim(),
       passengers: Number(f.passengers.value || 0),
-      vehicle_type_pref: f.vehicle_type_pref.value,
-      contact: f.contact.value.trim()
+      vehicle_type_pref: f.vehicle_type_pref ? f.vehicle_type_pref.value : '',
+      contact: f.contact.value.trim(),
+      vehicle_id: f.vehicle_id ? f.vehicle_id.value : '',
+      driver_id:  f.driver_id  ? f.driver_id.value  : ''
     };
     loader.show();
     try {
@@ -867,9 +922,10 @@
         const act = el.getAttribute('data-act');
         if (act === 'edit')          return (location.hash = '#/request/edit/' + r.id);
         if (act === 'cancel')        return openCancelModal(r.id);
-        if (act === 'approveL1')     return openApproveModal(r.id, 'อนุมัติ (หัวหน้าแผนก)');
+        if (act === 'approveL1')     return openApproveModal(r.id, 'อนุมัติขั้น 1 (ผอ.กอง)');
+        if (act === 'approveL2')     return openApproveModal(r.id, 'อนุมัติขั้น 2 (ปลัดเทศบาล)');
+        if (act === 'approveL3')     return openApproveModal(r.id, 'อนุมัติขั้น 3 (นายกเทศมนตรี)');
         if (act === 'reject')        return openRejectModal(r.id);
-        if (act === 'assign')        return openAssignModal(r);
         if (act === 'tripStart')     return openTripStartModal(r, data.vehicle);
         if (act === 'tripComplete')  return openTripCompleteModal(r, data.trip);
       });

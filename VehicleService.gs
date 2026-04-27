@@ -50,7 +50,10 @@ function Vehicle_save(session, payload) {
     Utils_audit(session.userId, session.username, 'vehicle.update', 'vehicle', payload.id, '');
     return ok(updated);
   } else {
-    // create
+    // create — กำหนด division_id: DivAdmin ผูกกองตัวเอง, อื่นๆ ตาม payload หรือ session
+    const newDivId = Auth_isDivAdmin(session)
+      ? (session.division_id || '')
+      : (payload.division_id || session.division_id || '');
     const created = DB_insert(SHEETS.VEHICLES, {
       id: Utils_genId(),
       plate_number: payload.plate_number,
@@ -62,6 +65,7 @@ function Vehicle_save(session, payload) {
       color: payload.color || '',
       fuel_type: payload.fuel_type || '',
       current_mileage: Number(payload.current_mileage) || 0,
+      division_id: newDivId,
       status: payload.status || VEHICLE_STATUS.AVAILABLE,
       notes: payload.notes || '',
       created_at: Utils_now(),
@@ -100,6 +104,10 @@ function Vehicle_availableOn(session, payload) {
   let vehicles = DB_findAll(SHEETS.VEHICLES).filter(v =>
     v.status !== VEHICLE_STATUS.RETIRED && v.status !== VEHICLE_STATUS.MAINTENANCE
   );
+  // Division scoping: กรองเฉพาะรถของกองตัวเอง (และรถที่ไม่ผูกกอง)
+  if (!Auth_canSeeAllDivisions(session) && session && session.division_id) {
+    vehicles = vehicles.filter(function(v) { return !v.division_id || v.division_id === session.division_id; });
+  }
   if (payload.type) vehicles = vehicles.filter(v => v.type === payload.type);
 
   // conflict check — block only if another booking overlaps
@@ -131,7 +139,11 @@ function Vehicle_availabilityCheck(session, payload) {
 
   const exclude  = payload.excludeRequestId || '';
   const minSeats = Number(payload.min_seats || 0);
-  const vehicles = DB_findAll(SHEETS.VEHICLES);
+  let vehicles = DB_findAll(SHEETS.VEHICLES);
+  // Division scoping: กรองเฉพาะรถของกองตัวเอง (และรถที่ไม่ผูกกอง)
+  if (!Auth_canSeeAllDivisions(session) && session && session.division_id) {
+    vehicles = vehicles.filter(function(v) { return !v.division_id || v.division_id === session.division_id; });
+  }
 
   const activeReqs = DB_findAll(SHEETS.REQUESTS).filter(r =>
     [REQUEST_STATUS.APPROVED, REQUEST_STATUS.IN_PROGRESS, REQUEST_STATUS.APPROVED_L1].indexOf(r.status) >= 0 &&
@@ -276,6 +288,10 @@ function Driver_save(session, payload) {
     Utils_audit(session.userId, session.username, 'driver.update', 'driver', payload.id, '');
     return ok(updated);
   } else {
+    // create — กำหนด division_id: DivAdmin ผูกกองตัวเอง, อื่นๆ ตาม payload หรือ session
+    const newDivId = Auth_isDivAdmin(session)
+      ? (session.division_id || '')
+      : (payload.division_id || session.division_id || '');
     const created = DB_insert(SHEETS.DRIVERS, {
       id: Utils_genId(),
       employee_code: payload.employee_code || '',
@@ -284,6 +300,7 @@ function Driver_save(session, payload) {
       license_expiry: payload.license_expiry || '',
       phone: payload.phone || '',
       email: payload.email || '',
+      division_id: newDivId,
       status: payload.status || 'active',
       notes: payload.notes || '',
       created_at: Utils_now(),

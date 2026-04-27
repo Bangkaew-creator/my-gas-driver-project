@@ -414,13 +414,22 @@
               <select name="vehicle_type_pref"><option value="">ไม่ระบุ</option>${vehicleTypes}</select></label>
           </div>
 
-          <!-- Availability preview — updates after dates + passengers filled -->
-          <div class="avail-preview" id="availPreview">
-            <div class="avail-empty">
-              <i class="fa-solid fa-circle-info"></i>
-              <span>กรอก <strong>วันที่/เวลา</strong> และ <strong>จำนวนผู้โดยสาร</strong> เพื่อดูรถที่ว่าง</span>
-            </div>
+          <!-- เลือกรถและคนขับ — อัปเดตอัตโนมัติหลังกรอกวันที่/เวลา -->
+          <div class="form-row">
+            <label class="field"><span class="field-label">รถ <span class="req">*</span></span>
+              <select name="vehicle_id" id="vehicleSelect" required>
+                <option value="">-- กรอกวันที่/เวลาก่อน --</option>
+              </select>
+              <span class="field-hint" id="vehicleHint"></span>
+            </label>
+            <label class="field"><span class="field-label">คนขับ <span class="req">*</span></span>
+              <select name="driver_id" id="driverSelect" required>
+                <option value="">-- กรอกวันที่/เวลาก่อน --</option>
+              </select>
+              <span class="field-hint" id="driverHint"></span>
+            </label>
           </div>
+          <div id="availStatus" class="avail-status-msg"></div>
 
           <label class="field"><span class="field-label">ผู้ติดต่อ / เบอร์โทร</span>
             <input type="text" name="contact" maxlength="100" placeholder="ชื่อ / เบอร์โทรศัพท์" value="${H.esc(me.phone || '')}"></label>
@@ -530,9 +539,14 @@
 
     const myRole = (d.me || {}).role || '';
     const isOwner = (d.me || {}).id === r.requester_id;
-    const canApproveL1 = (myRole === 'approver' || myRole === 'admin') && r.status === 'pending';
-    const canAssignL2 = (myRole === 'manager' || myRole === 'admin') && r.status === 'approved_l1';
-    const canCancel = isOwner && ['pending', 'approved_l1'].indexOf(r.status) >= 0;
+    const isSuperAdmin = myRole === 'super_admin';
+    // L1 ผอ.กอง: อนุมัติ PENDING
+    const canApproveL1 = (myRole === 'director' || isSuperAdmin) && r.status === 'pending';
+    // L2 ปลัด: อนุมัติ APPROVED_L1
+    const canApproveL2 = (myRole === 'deputy' || isSuperAdmin) && r.status === 'approved_l1';
+    // L3 นายก: อนุมัติ APPROVED_L2
+    const canApproveL3 = (myRole === 'mayor' || isSuperAdmin) && r.status === 'approved_l2';
+    const canCancel = isOwner && ['pending', 'approved_l1', 'approved_l2'].indexOf(r.status) >= 0;
     const canEdit = isOwner && r.status === 'pending';
     const canStartTrip = myRole === 'driver' && r.status === 'approved' && dr && dr.user_id === (d.me || {}).id;
     const canCompleteTrip = myRole === 'driver' && r.status === 'in_progress' && dr && dr.user_id === (d.me || {}).id;
@@ -541,12 +555,16 @@
     if (canEdit) actions.push(`<button class="btn btn-ghost" data-act="edit"><i class="fa-solid fa-pen-to-square"></i> แก้ไข</button>`);
     if (canCancel) actions.push(`<button class="btn btn-danger" data-act="cancel"><i class="fa-solid fa-trash-can"></i> ยกเลิกคำขอ</button>`);
     if (canApproveL1) {
-      actions.push(`<button class="btn btn-success" data-act="approveL1"><i class="fa-solid fa-check"></i> อนุมัติ (หัวหน้า)</button>`);
+      actions.push(`<button class="btn btn-success" data-act="approveL1"><i class="fa-solid fa-check"></i> อนุมัติขั้น 1 (ผอ.กอง)</button>`);
       actions.push(`<button class="btn btn-danger"  data-act="reject"><i class="fa-solid fa-xmark"></i> ไม่อนุมัติ</button>`);
     }
-    if (canAssignL2) {
-      actions.push(`<button class="btn btn-accent" data-act="assign"><i class="fa-solid fa-car-side"></i> จัดรถ/คนขับ</button>`);
-      actions.push(`<button class="btn btn-danger" data-act="reject"><i class="fa-solid fa-xmark"></i> ไม่อนุมัติ</button>`);
+    if (canApproveL2) {
+      actions.push(`<button class="btn btn-success" data-act="approveL2"><i class="fa-solid fa-check-double"></i> อนุมัติขั้น 2 (ปลัด)</button>`);
+      actions.push(`<button class="btn btn-danger"  data-act="reject"><i class="fa-solid fa-xmark"></i> ไม่อนุมัติ</button>`);
+    }
+    if (canApproveL3) {
+      actions.push(`<button class="btn btn-success" data-act="approveL3"><i class="fa-solid fa-seal-check"></i> อนุมัติขั้น 3 (นายก)</button>`);
+      actions.push(`<button class="btn btn-danger"  data-act="reject"><i class="fa-solid fa-xmark"></i> ไม่อนุมัติ</button>`);
     }
     if (canStartTrip)    actions.push(`<button class="btn btn-primary" data-act="tripStart"><i class="fa-solid fa-play"></i> เริ่มเดินทาง</button>`);
     if (canCompleteTrip) actions.push(`<button class="btn btn-success" data-act="tripComplete"><i class="fa-solid fa-flag-checkered"></i> สิ้นสุดการเดินทาง</button>`);

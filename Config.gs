@@ -113,11 +113,12 @@ const ROLE_LABELS = {
   requester:   'ผู้ขอใช้รถ'
 };
 
-// ---------- สถานะคำขอ ----------
+// ---------- สถานะคำขอ (3-level approval — ผู้ขอเลือกรถ/คนขับเองตอนยื่นคำขอ) ----------
 const REQUEST_STATUS = {
-  PENDING:     'pending',      // รอหัวหน้าแผนกอนุมัติ
-  APPROVED_L1: 'approved_l1',  // หัวหน้าอนุมัติแล้ว รอจัดสรรรถ
-  APPROVED:    'approved',     // จัดสรรรถแล้ว พร้อมเดินทาง
+  PENDING:     'pending',      // รออนุมัติชั้น 1 (ผอ.กอง)
+  APPROVED_L1: 'approved_l1',  // ผอ.กองอนุมัติแล้ว รออนุมัติชั้น 2 (ปลัด)
+  APPROVED_L2: 'approved_l2',  // ปลัดอนุมัติแล้ว รออนุมัติชั้น 3 (นายก)
+  APPROVED:    'approved',     // นายกอนุมัติแล้ว พร้อมเดินทาง
   IN_PROGRESS: 'in_progress',  // กำลังเดินทาง
   COMPLETED:   'completed',    // เสร็จสิ้น
   REJECTED:    'rejected',     // ถูกปฏิเสธ
@@ -125,13 +126,14 @@ const REQUEST_STATUS = {
 };
 
 const STATUS_LABELS = {
-  pending:     { text: 'รออนุมัติขั้น 1',       color: '#f59e0b', bg: '#fef3c7' },
-  approved_l1: { text: 'รอจัดสรรรถ',           color: '#3b82f6', bg: '#dbeafe' },
-  approved:    { text: 'อนุมัติแล้ว',           color: '#10b981', bg: '#d1fae5' },
-  in_progress: { text: 'กำลังเดินทาง',         color: '#8b5cf6', bg: '#ede9fe' },
-  completed:   { text: 'เสร็จสิ้น',             color: '#64748b', bg: '#f1f5f9' },
-  rejected:    { text: 'ไม่อนุมัติ',            color: '#ef4444', bg: '#fee2e2' },
-  cancelled:   { text: 'ยกเลิก',                color: '#6b7280', bg: '#f3f4f6' }
+  pending:     { text: 'รออนุมัติชั้น 1 (ผอ.กอง)', color: '#f59e0b', bg: '#fef3c7' },
+  approved_l1: { text: 'รออนุมัติชั้น 2 (ปลัด)',   color: '#f97316', bg: '#ffedd5' },
+  approved_l2: { text: 'รออนุมัติชั้น 3 (นายก)',   color: '#6366f1', bg: '#e0e7ff' },
+  approved:    { text: 'อนุมัติแล้ว พร้อมเดินทาง', color: '#10b981', bg: '#d1fae5' },
+  in_progress: { text: 'กำลังเดินทาง',             color: '#8b5cf6', bg: '#ede9fe' },
+  completed:   { text: 'เสร็จสิ้น',                color: '#64748b', bg: '#f1f5f9' },
+  rejected:    { text: 'ไม่อนุมัติ',               color: '#ef4444', bg: '#fee2e2' },
+  cancelled:   { text: 'ยกเลิก',                   color: '#6b7280', bg: '#f3f4f6' }
 };
 
 // ---------- สถานะรถ ----------
