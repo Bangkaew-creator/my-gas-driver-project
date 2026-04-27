@@ -1974,9 +1974,42 @@
   function wireAppShell() {
     document.getElementById('logoutBtn').addEventListener('click', doLogout);
     document.getElementById('changePassBtn').addEventListener('click', openChangePasswordModal);
-    document.getElementById('hamburger').addEventListener('click', () => {
-      document.querySelector('.sidebar').classList.toggle('open');
-    });
+
+    // ---------- Sidebar (mobile drawer) ----------
+    const sidebarEl  = document.querySelector('.sidebar');
+    const backdropEl = document.getElementById('sidebarBackdrop');
+    const isMobile   = () => window.matchMedia('(max-width: 900px)').matches;
+    function openSidebar() {
+      if (!sidebarEl) return;
+      sidebarEl.classList.add('open');
+      if (backdropEl) backdropEl.classList.add('show');
+      if (isMobile()) document.body.classList.add('sidebar-locked');
+    }
+    function closeSidebar() {
+      if (!sidebarEl) return;
+      sidebarEl.classList.remove('open');
+      if (backdropEl) backdropEl.classList.remove('show');
+      document.body.classList.remove('sidebar-locked');
+    }
+    function toggleSidebar() {
+      if (sidebarEl && sidebarEl.classList.contains('open')) closeSidebar();
+      else openSidebar();
+    }
+    document.getElementById('hamburger').addEventListener('click', toggleSidebar);
+    if (backdropEl) backdropEl.addEventListener('click', closeSidebar);
+
+    // Auto-close drawer when a nav link is tapped on mobile, then route runs
+    const sidenavEl = document.getElementById('sidenav');
+    if (sidenavEl) {
+      sidenavEl.addEventListener('click', (e) => {
+        const a = e.target.closest && e.target.closest('a.sidenav-item');
+        if (!a) return;
+        if (isMobile()) closeSidebar();
+      });
+    }
+    // If the viewport grows back to desktop, make sure the drawer is reset
+    window.addEventListener('resize', () => { if (!isMobile()) closeSidebar(); });
+
     window.addEventListener('hashchange', routeTo);
 
     // Intercept in-app hash links so <base target="_top"> doesn't navigate
