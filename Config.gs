@@ -13,6 +13,7 @@ const SYSTEM_NAME    = 'ระบบขอใช้รถราชการ';
 
 // ---------- ชื่อชีตในฐานข้อมูล ----------
 const SHEETS = {
+  DIVISIONS:     'Divisions',
   USERS:         'Users',
   VEHICLES:      'Vehicles',
   DRIVERS:       'Drivers',
@@ -26,22 +27,37 @@ const SHEETS = {
   AUDIT_LOGS:    'AuditLogs'
 };
 
+// ---------- กอง (Divisions) ค่าเริ่มต้น 8 กอง ----------
+const DEFAULT_DIVISIONS = [
+  { code: 'OFFICE',     name: 'สำนักปลัด' },
+  { code: 'FINANCE',    name: 'กองคลัง' },
+  { code: 'ENGINEER',   name: 'กองช่าง' },
+  { code: 'HEALTH',     name: 'กองสาธารณสุขและสิ่งแวดล้อม' },
+  { code: 'EDUCATION',  name: 'กองการศึกษา' },
+  { code: 'PERSONNEL',  name: 'กองการเจ้าหน้าที่' },
+  { code: 'STRATEGY',   name: 'กองยุทธศาสตร์และงบประมาณ' },
+  { code: 'WELFARE',    name: 'กองสวัสดิการสังคม' }
+];
+
 // ---------- โครงสร้างคอลัมน์ (schema) ----------
 const SCHEMA = {
+  [SHEETS.DIVISIONS]: [
+    'id','code','name','active','created_at','updated_at'
+  ],
   [SHEETS.USERS]: [
     'id','username','password_hash','salt','fullname','email',
-    'department','position','phone','role','status','created_at','updated_at'
+    'department','division_id','position','phone','role','status','created_at','updated_at'
   ],
   [SHEETS.VEHICLES]: [
     'id','plate_number','brand','model','year','type','seats','color',
-    'fuel_type','current_mileage','status','notes','created_at','updated_at'
+    'fuel_type','current_mileage','division_id','status','notes','created_at','updated_at'
   ],
   [SHEETS.DRIVERS]: [
     'id','employee_code','fullname','license_number','license_expiry',
-    'phone','email','status','notes','created_at','updated_at'
+    'phone','email','division_id','status','notes','created_at','updated_at'
   ],
   [SHEETS.REQUESTS]: [
-    'id','request_no','requester_id','requester_name','department','position','phone',
+    'id','request_no','requester_id','requester_name','department','division_id','position','phone',
     'purpose','destination','passengers_count','passenger_list',
     'depart_date','depart_time','return_date','return_time',
     'vehicle_type_pref','vehicle_id','vehicle_plate','driver_id','driver_name',
@@ -70,21 +86,31 @@ const SCHEMA = {
   [SHEETS.AUDIT_LOGS]: ['id','user_id','username','action','entity','entity_id','detail','created_at']
 };
 
-// ---------- Role (บทบาท) ----------
+// ---------- Role (บทบาท) — 7 บทบาท ----------
+// ค่าใหม่ + alias เพื่อความเข้ากันได้กับโค้ดเดิม (จะถูก rewrite ในเฟส B1)
 const ROLES = {
-  ADMIN:    'admin',    // ผู้ดูแลระบบ — ทุกสิทธิ์
-  MANAGER:  'manager',  // ผู้จัดการรถ — จัดสรรรถ/คนขับ, อนุมัติขั้น 2
-  APPROVER: 'approver', // หัวหน้าแผนก — อนุมัติขั้น 1
-  USER:     'user',     // ผู้ขอใช้รถ
-  DRIVER:   'driver'    // พนักงานขับรถ — บันทึก trip
+  SUPER_ADMIN: 'super_admin', // 1. ซุปเปอร์แอดมิน — สิทธิ์เต็ม เห็นทุกกอง
+  DIV_ADMIN:   'div_admin',   // 2. แอดมินระดับกอง — จัดการเฉพาะข้อมูลกองตัวเอง
+  DIRECTOR:    'director',    // 3. ผู้อำนวยการกอง — อนุมัติชั้นที่ 1
+  DEPUTY:      'deputy',      // 4. ปลัดเทศบาล — อนุมัติชั้นที่ 2
+  MAYOR:       'mayor',       // 5. นายกเทศมนตรี — อนุมัติชั้นที่ 3
+  DRIVER:      'driver',      // 6. พนักงานขับรถ — บันทึกการเดินทาง + ยื่นคำขอได้
+  REQUESTER:   'requester',   // 7. ผู้ขอใช้รถ — ยื่นคำขอเฉพาะกองตัวเอง
+  // legacy aliases — โค้ดเดิม (isAdmin/isManager/isApprover/isUser) ยังทำงานได้ถูกความหมาย
+  ADMIN:    'super_admin',
+  MANAGER:  'div_admin',
+  APPROVER: 'director',
+  USER:     'requester'
 };
 
 const ROLE_LABELS = {
-  admin:    'ผู้ดูแลระบบ',
-  manager:  'ผู้จัดการรถ',
-  approver: 'หัวหน้าแผนก (ผู้อนุมัติ)',
-  user:     'ผู้ขอใช้รถ',
-  driver:   'พนักงานขับรถ'
+  super_admin: 'ซุปเปอร์แอดมิน',
+  div_admin:   'แอดมินระดับกอง',
+  director:    'ผู้อำนวยการกอง',
+  deputy:      'ปลัดเทศบาล',
+  mayor:       'นายกเทศมนตรี',
+  driver:      'พนักงานขับรถ',
+  requester:   'ผู้ขอใช้รถ'
 };
 
 // ---------- สถานะคำขอ ----------

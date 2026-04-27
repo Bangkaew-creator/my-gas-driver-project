@@ -3,7 +3,7 @@
  *  Auth.gs — Authentication & Session Management
  *  - Login ด้วย username/password (SHA-256 + salt)
  *  - Session token เก็บใน CacheService (TTL 8 ชม.)
- *  - Role-based permission check
+ *  - Role-based permission check + Division scoping
  * ============================================================================
  */
 
@@ -26,6 +26,13 @@ function Auth_login(username, password) {
     return err('invalid_credentials', 'username หรือ password ไม่ถูกต้อง');
   }
 
+  // ดึงชื่อกอง (สำหรับแสดงใน session)
+  let divisionName = '';
+  if (user.division_id) {
+    const d = DB_findById(SHEETS.DIVISIONS, user.division_id);
+    if (d) divisionName = d.name;
+  }
+
   // สร้าง session
   const token = Utils_genToken();
   const session = {
@@ -35,6 +42,8 @@ function Auth_login(username, password) {
     fullname: user.fullname,
     role: user.role,
     department: user.department,
+    division_id: user.division_id || '',
+    division_name: divisionName,
     email: user.email,
     loginAt: Utils_now()
   };
@@ -126,7 +135,45 @@ function Auth_requireRole(session, roles) {
   }
 }
 
-function Auth_isAdmin(session)    { return session && session.role === ROLES.ADMIN; }
-function Auth_isManager(session)  { return session && (session.role === ROLES.MANAGER || session.role === ROLES.ADMIN); }
-function Auth_isApprover(session) { return session && (session.role === ROLES.APPROVER || session.role === ROLES.ADMIN); }
-function Auth_isDriver(session)   { return session && session.role === ROLES.DRIVER; }
+// ---------- 7 บทบาทใหม่ ----------
+function Auth_isSuperAdmin(session) { return !!(session && session.role === ROLES.SUPER_ADMIN); }
+function Auth_isDivAdmin(session)   { return !!(session && session.role === ROLES.DIV_ADMIN); }
+function Auth_isDirector(session)   { return !!(session && session.role === ROLES.DIRECTOR); }
+function Auth_isDeputy(session)     { return !!(session && session.role === ROLES.DEPUTY); }
+function Auth_isMayor(session)      { return !!(session && session.role === ROLES.MAYOR); }
+function Auth_isDriver(session)     { return !!(session && session.role === ROLES.DRIVER); }
+function Auth_isRequester(session)  { return !!(session && session.role === ROLES.REQUESTER); }
+
+// ---------- Legacy aliases (รักษา semantic เดิม) ----------
+// isAdmin    → SuperAdmin
+// isManager  → "ผู้จัดการข้อมูล" = SuperAdmin หรือ DivAdmin
+// isApprover → "ผู้อนุมัติขั้น 1" = SuperAdmin หรือ Director
+function Auth_isAdmin(session)    { return Auth_isSuperAdmin(session); }
+function Auth_isManager(session)  { return Auth_isSuperAdmin(session) || Auth_isDivAdmin(session); }
+function Auth_isApprover(session) { return Auth_isSuperAdmin(session) || Auth_isDirector(session); }
+
+// ---------- Division scoping helpers ----------
+/**
+ * เห็นข้อมูลทุกกอง? (SuperAdmin, ปลัด, นายก)
+ */
+function Auth_canSeeAllDivisions(session) {
+  return Auth_isSuperAdmin(session) || Auth_isDeputy(session) || Auth_isMayor(session);
+}
+
+/**
+ * เห็นข้อมูลของกอง divId? (เห็นทุกกอง หรือ อยู่กองเดียวกัน)
+ */
+function Auth_canSeeDivision(session, divId) {
+  if (Auth_canSeeAllDivisions(session)) return true;
+  if (!session || !divId) return false;
+  return session.division_id === divId;
+}
+
+/**
+ * จัดการ (เพิ่ม/แก้/ลบ) ข้อมูลของกอง divId? (SuperAdmin = ทุกกอง, DivAdmin = เฉพาะกองตัวเอง)
+ */
+function Auth_canManageDivision(session, divId) {
+  if (Auth_isSuperAdmin(session)) return true;
+  if (Auth_isDivAdmin(session) && session.division_id && session.division_id === divId) return true;
+  return false;
+}
