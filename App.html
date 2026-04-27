@@ -360,26 +360,32 @@
 
   function buildNav() {
     const role = (State.user || {}).role;
+    const ALL    = ['super_admin','div_admin','director','deputy','mayor','driver','requester'];
+    const ADMIN  = ['super_admin','div_admin'];
+    const EXEC   = ['super_admin','div_admin','director','deputy','mayor'];
+    const APPROV = ['super_admin','div_admin','director','deputy','mayor'];
+    const NEW_REQ = ['super_admin','div_admin','director','deputy','requester'];
     const items = [
       // ภาพรวม
-      { group: 'overview', hash: '#/dashboard',     icon: 'fa-chart-column',       label: 'แดชบอร์ด',     roles: ['admin', 'manager', 'approver', 'user', 'driver'] },
-      { group: 'overview', hash: '#/calendar',      icon: 'fa-calendar-days',      label: 'ปฏิทินใช้รถ',   roles: ['admin', 'manager', 'approver', 'user', 'driver'] },
-      { group: 'overview', hash: '#/schedule',      icon: 'fa-table-columns',      label: 'ตารางใช้รถ',    roles: ['admin', 'manager', 'approver', 'user', 'driver'] },
+      { group: 'overview', hash: '#/dashboard',     icon: 'fa-chart-column',       label: 'แดชบอร์ด',     roles: ALL },
+      { group: 'overview', hash: '#/calendar',      icon: 'fa-calendar-days',      label: 'ปฏิทินใช้รถ',   roles: ALL },
+      { group: 'overview', hash: '#/schedule',      icon: 'fa-table-columns',      label: 'ตารางใช้รถ',    roles: ALL },
       // ภารกิจของฉัน
-      { group: 'mine',     hash: '#/requests/mine', icon: 'fa-file-lines',         label: 'คำขอของฉัน',    roles: ['admin', 'manager', 'approver', 'user', 'driver'] },
-      { group: 'mine',     hash: '#/request/new',   icon: 'fa-plus',               label: 'สร้างคำขอใหม่',  roles: ['admin', 'manager', 'approver', 'user'] },
-      { group: 'mine',     hash: '#/trips',         icon: 'fa-route',              label: 'งานขับรถของฉัน', roles: ['driver', 'admin'] },
+      { group: 'mine',     hash: '#/requests/mine', icon: 'fa-file-lines',         label: 'คำขอของฉัน',    roles: ALL },
+      { group: 'mine',     hash: '#/request/new',   icon: 'fa-plus',               label: 'สร้างคำขอใหม่',  roles: NEW_REQ },
+      { group: 'mine',     hash: '#/trips',         icon: 'fa-route',              label: 'งานขับรถของฉัน', roles: ['driver','super_admin','div_admin'] },
       // การอนุมัติ & คำขอ
-      { group: 'approval', hash: '#/approval',      icon: 'fa-circle-check',       label: 'คิวอนุมัติ',     roles: ['admin', 'manager', 'approver'] },
-      { group: 'approval', hash: '#/requests/all',  icon: 'fa-folder-open',        label: 'คำขอทั้งหมด',   roles: ['admin', 'manager'] },
+      { group: 'approval', hash: '#/approval',      icon: 'fa-circle-check',       label: 'คิวอนุมัติ',     roles: APPROV },
+      { group: 'approval', hash: '#/requests/all',  icon: 'fa-folder-open',        label: 'คำขอทั้งหมด',   roles: EXEC },
       // จัดการยานพาหนะ
-      { group: 'fleet',    hash: '#/vehicles',      icon: 'fa-car-side',           label: 'จัดการรถ',      roles: ['admin', 'manager'] },
-      { group: 'fleet',    hash: '#/drivers',       icon: 'fa-id-card',            label: 'จัดการคนขับ',   roles: ['admin', 'manager'] },
-      { group: 'fleet',    hash: '#/fuel',          icon: 'fa-gas-pump',           label: 'เติมน้ำมัน',    roles: ['admin', 'manager', 'driver'] },
-      { group: 'fleet',    hash: '#/maint',         icon: 'fa-screwdriver-wrench', label: 'ซ่อมบำรุง',     roles: ['admin', 'manager'] },
+      { group: 'fleet',    hash: '#/vehicles',      icon: 'fa-car-side',           label: 'จัดการรถ',      roles: ADMIN },
+      { group: 'fleet',    hash: '#/drivers',       icon: 'fa-id-card',            label: 'จัดการคนขับ',   roles: ADMIN },
+      { group: 'fleet',    hash: '#/fuel',          icon: 'fa-gas-pump',           label: 'เติมน้ำมัน',    roles: ['super_admin','div_admin','driver'] },
+      { group: 'fleet',    hash: '#/maint',         icon: 'fa-screwdriver-wrench', label: 'ซ่อมบำรุง',     roles: ADMIN },
       // รายงาน & ตั้งค่า
-      { group: 'admin',    hash: '#/reports',       icon: 'fa-chart-line',         label: 'รายงาน',       roles: ['admin', 'manager'] },
-      { group: 'admin',    hash: '#/users',         icon: 'fa-users',              label: 'ผู้ใช้งาน',     roles: ['admin'] }
+      { group: 'admin',    hash: '#/reports',       icon: 'fa-chart-line',         label: 'รายงาน',       roles: EXEC },
+      { group: 'admin',    hash: '#/users',         icon: 'fa-users',              label: 'ผู้ใช้งาน',     roles: ADMIN },
+      { group: 'admin',    hash: '#/divisions',     icon: 'fa-building',           label: 'จัดการกอง',     roles: ['super_admin'] }
     ];
 
     const visible = items.filter(it => it.roles.indexOf(role) >= 0);
@@ -462,6 +468,7 @@
         case 'fuel':           return await pageFuel();
         case 'maint':          return await pageMaint();
         case 'users':          return await pageUsers();
+        case 'divisions':      return await pageDivisions();
         case 'reports':        return await pageReports();
       }
       pageEl().innerHTML = `<div class="card"><h2>ไม่พบหน้านี้</h2><p>กรุณาเลือกเมนูอื่น</p></div>`;
@@ -1323,6 +1330,69 @@
     if (!(await confirmDialog('ลบรถคันนี้? จะไม่สามารถกู้คืนได้'))) return;
     loader.show();
     try { await api('vehicle.delete', { id }); toast.success('ลบแล้ว'); routeTo(); }
+    catch (e) { toast.error(e.message || 'ลบไม่ได้'); }
+    finally { loader.hide(); }
+  }
+
+  /* ---- Divisions ---- */
+  async function pageDivisions() {
+    titleEl().textContent = 'จัดการกอง';
+    loader.show();
+    try {
+      const data = await api('division.list', {});
+      pageEl().innerHTML = Views.divisions({ items: data.items });
+      document.getElementById('btnNewDivision').addEventListener('click', () => openDivisionModal(null));
+      document.querySelectorAll('#divisionTable [data-act="edit"]').forEach(b =>
+        b.addEventListener('click', () => openDivisionModal(b.getAttribute('data-id'))));
+      document.querySelectorAll('#divisionTable [data-act="delete"]').forEach(b =>
+        b.addEventListener('click', () => deleteDivision(b.getAttribute('data-id'))));
+      _wireTableSearch('divisionSearch', 'divisionTable');
+    } finally { loader.hide(); }
+  }
+
+  async function openDivisionModal(id) {
+    let divData = {};
+    if (id) {
+      loader.show();
+      try { divData = await api('division.get', { id }); }
+      catch (e) { toast.error(e.message || 'โหลดข้อมูลไม่ได้'); return; }
+      finally { loader.hide(); }
+    }
+    modal.open({
+      title: id ? 'แก้ไขกอง' : 'เพิ่มกองใหม่',
+      body: Views.divisionForm(divData),
+      buttons: [
+        {
+          label: 'บันทึก', primary: true, onClick: async function () {
+            const form = document.getElementById('divisionForm');
+            if (!form.checkValidity()) { form.reportValidity(); return false; }
+            const fd = new FormData(form);
+            const payload = {
+              id:     fd.get('id') || undefined,
+              code:   fd.get('code'),
+              name:   fd.get('name'),
+              active: form.querySelector('[name="active"]').checked
+            };
+            loader.show();
+            try {
+              await api('division.save', payload);
+              toast.success('บันทึกแล้ว');
+              modal.close();
+              await pageDivisions();
+            } catch (e) {
+              toast.error(e.message || 'บันทึกไม่ได้');
+              return false;
+            } finally { loader.hide(); }
+          }
+        }
+      ]
+    });
+  }
+
+  async function deleteDivision(id) {
+    if (!(await confirmDialog('ลบกองนี้? จะไม่สามารถกู้คืนได้'))) return;
+    loader.show();
+    try { await api('division.delete', { id }); toast.success('ลบแล้ว'); routeTo(); }
     catch (e) { toast.error(e.message || 'ลบไม่ได้'); }
     finally { loader.hide(); }
   }

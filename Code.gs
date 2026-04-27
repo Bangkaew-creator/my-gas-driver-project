@@ -239,6 +239,25 @@ function api(action, token, payload) {
       case 'user.delete':
         return User_delete(session, payload.id);
 
+      /* ============ Divisions ============ */
+      case 'division.list': {
+        const r = Division_list(session, payload);
+        return r.ok ? ok({ items: r.data }) : r;
+      }
+
+      case 'division.get': {
+        const r = Division_get(session, payload.id);
+        return r.ok ? ok(r.data) : r;
+      }
+
+      case 'division.save': {
+        const r = Division_save(session, payload);
+        return r.ok ? ok(r.data) : r;
+      }
+
+      case 'division.delete':
+        return Division_delete(session, payload.id);
+
       /* ============ Reports ============ */
       case 'report.dashboard': {
         const r = Report_dashboard(session);

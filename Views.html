@@ -2272,6 +2272,62 @@
     `;
   };
 
+  Views.divisions = function (d) {
+    const rows = (d.items || []).map(function (div) {
+      const activeLabel = String(div.active) === 'true' || div.active === true
+        ? '<span class="badge badge-success">ใช้งาน</span>'
+        : '<span class="badge badge-secondary">ปิดใช้งาน</span>';
+      return `<tr>
+        <td>${H.esc(div.code)}</td>
+        <td>${H.esc(div.name)}</td>
+        <td>${activeLabel}</td>
+        <td>
+          <button class="btn btn-sm btn-secondary" data-act="edit" data-id="${H.esc(div.id)}">แก้ไข</button>
+          <button class="btn btn-sm btn-danger"    data-act="delete" data-id="${H.esc(div.id)}">ลบ</button>
+        </td>
+      </tr>`;
+    }).join('');
+    return `
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">จัดการกอง</h2>
+          <button class="btn btn-primary" id="btnNewDivision">+ เพิ่มกอง</button>
+        </div>
+        <input type="search" id="divisionSearch" class="form-control mb-2" placeholder="ค้นหา...">
+        <div class="table-responsive">
+          <table class="data-table" id="divisionTable">
+            <thead><tr>
+              <th>รหัส</th><th>ชื่อกอง</th><th>สถานะ</th><th>จัดการ</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  };
+
+  Views.divisionForm = function (d) {
+    d = d || {};
+    const isEdit = !!d.id;
+    const activeChecked = !isEdit || String(d.active) === 'true' || d.active === true ? 'checked' : '';
+    return `
+      <form id="divisionForm" class="form-grid" onsubmit="return false">
+        ${isEdit ? `<input type="hidden" name="id" value="${H.esc(d.id)}">` : ''}
+        <label class="field"><span class="field-label">รหัสกอง <span class="required">*</span></span>
+          <input type="text" name="code" value="${H.esc(d.code || '')}" maxlength="30" required
+            ${isEdit ? 'readonly style="background:#f5f5f5"' : ''}>
+        </label>
+        <label class="field"><span class="field-label">ชื่อกอง <span class="required">*</span></span>
+          <input type="text" name="name" value="${H.esc(d.name || '')}" maxlength="100" required>
+        </label>
+        <label class="field field-inline">
+          <input type="checkbox" name="active" ${activeChecked}>
+          <span class="field-label">เปิดใช้งาน</span>
+        </label>
+      </form>
+    `;
+  };
+
   global.Views = Views;
 })(window);
 </script>
