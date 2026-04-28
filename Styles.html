@@ -2117,6 +2117,16 @@ textarea { resize: vertical; min-height: 80px; }
 .rpt-hero-h { font-size: 21px; font-weight: 700; color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,.15); margin: 0; }
 .rpt-hero-sub { font-size: 13px; color: rgba(255,255,255,.9); margin-top: 4px; line-height: 1.5; }
 
+/* Section divider for grouped report content */
+.rpt-section { margin-top: 18px; }
+.rpt-section-head { margin-bottom: 12px; padding: 0 4px; }
+.rpt-section-title {
+  font-size: 16px; font-weight: 700; color: var(--text); margin: 0 0 4px;
+  display: flex; align-items: center; gap: 8px;
+}
+.rpt-section-title i { color: var(--theme-accent-2); }
+.rpt-section-sub { font-size: 13px; color: var(--text-mute); line-height: 1.5; }
+
 /* Type cards */
 .rpt-type-grid {
   display: grid;
@@ -2538,9 +2548,37 @@ textarea { resize: vertical; min-height: 80px; }
   z-index: 2;
 }
 .sch-bar-text { text-overflow: ellipsis; overflow: hidden; }
+.sch-bar-pending     { background: linear-gradient(135deg, #fcd34d, #d97706); }
 .sch-bar-approved_l1 { background: linear-gradient(135deg, #60a5fa, #2563eb); }
+.sch-bar-approved_l2 { background: linear-gradient(135deg, #818cf8, #4f46e5); }
 .sch-bar-approved    { background: linear-gradient(135deg, #34d399, #059669); }
 .sch-bar-in_progress { background: linear-gradient(135deg, #a78bfa, #6d28d9); }
+
+/* Schedule mode tabs */
+.sch-mode-tabs {
+  display: flex; gap: 4px;
+  background: var(--surface-2,#f1f5f9);
+  border-radius: 10px;
+  padding: 3px;
+  border: 1px solid var(--border);
+}
+.sch-mode-tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.sch-mode-tab.active {
+  background: #fff;
+  color: var(--theme-accent,#059669);
+  box-shadow: 0 1px 4px rgba(0,0,0,.1);
+}
+.sch-mode-tab:hover:not(.active) { background: rgba(0,0,0,.04); }
 
 .sch-legend {
   display: flex; align-items: center; gap: 14px;
@@ -3498,5 +3536,17 @@ textarea { resize: vertical; min-height: 80px; }
     -webkit-print-color-adjust: exact;
   }
   .chart-wrap { height: 180px; }
+  /* ซ่อนปุ่มพิมพ์เอกสารใน main app เมื่อ print */
+  #btnPrintForm4,
+  [data-act="print3"],
+  [data-act="print4"],
+  .card-actions-bar { display: none !important; }
+}
+
+/* ================================================================
+   Print form — layout helpers (main app context)
+   ================================================================ */
+.print-form-trigger {
+  margin-left: auto;
 }
 </style>

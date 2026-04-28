@@ -208,10 +208,14 @@ function Vehicle_schedule(session, payload) {
   const toD   = new Date(toStr   + 'T23:59:59+07:00');
   if (isNaN(fromD.getTime()) || isNaN(toD.getTime())) return err('invalid_input', 'วันที่ไม่ถูกต้อง');
 
-  const vehicles = DB_findAll(SHEETS.VEHICLES).filter(v => v.status !== VEHICLE_STATUS.RETIRED);
+  let vehicles = DB_findAll(SHEETS.VEHICLES).filter(v => v.status !== VEHICLE_STATUS.RETIRED);
+  // Division scoping
+  if (!Auth_canSeeAllDivisions(session) && session && session.division_id) {
+    vehicles = vehicles.filter(function(v) { return !v.division_id || v.division_id === session.division_id; });
+  }
+  const SCH_ACTIVE = [REQUEST_STATUS.PENDING, REQUEST_STATUS.APPROVED_L1, REQUEST_STATUS.APPROVED_L2, REQUEST_STATUS.APPROVED, REQUEST_STATUS.IN_PROGRESS];
   const reqs = DB_findAll(SHEETS.REQUESTS).filter(r =>
-    [REQUEST_STATUS.APPROVED_L1, REQUEST_STATUS.APPROVED, REQUEST_STATUS.IN_PROGRESS].indexOf(r.status) >= 0 &&
-    r.vehicle_id
+    SCH_ACTIVE.indexOf(r.status) >= 0 && r.vehicle_id
   );
 
   const byVehicle = {};
@@ -227,6 +231,8 @@ function Vehicle_schedule(session, payload) {
       department:     r.department,
       purpose:        r.purpose,
       destination:    r.destination,
+      driver_name:    r.driver_name || '',
+      vehicle_plate:  r.vehicle_plate || '',
       start_iso:      rs.toISOString(),
       end_iso:        re.toISOString(),
       status:         r.status
@@ -245,6 +251,67 @@ function Vehicle_schedule(session, payload) {
     vehicles: vehicles.map(v => Object.assign({}, Adapter_vehicleOut(v), {
       bookings: byVehicle[v.id] || []
     }))
+  });
+}
+
+/**
+ * ตารางการทำงานของคนขับ — รายการจองของคนขับแต่ละคนในช่วงที่กำหนด
+ * payload: { from: 'yyyy-MM-dd', to: 'yyyy-MM-dd' }
+ */
+function Driver_schedule(session, payload) {
+  payload = payload || {};
+  const now = new Date();
+  const defFrom = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
+  const plus30  = new Date(now.getTime() + 30 * 86400000);
+  const defTo   = Utilities.formatDate(plus30, 'Asia/Bangkok', 'yyyy-MM-dd');
+  const fromStr = payload.from || defFrom;
+  const toStr   = payload.to   || defTo;
+  const fromD = new Date(fromStr + 'T00:00:00+07:00');
+  const toD   = new Date(toStr   + 'T23:59:59+07:00');
+  if (isNaN(fromD.getTime()) || isNaN(toD.getTime())) return err('invalid_input', 'วันที่ไม่ถูกต้อง');
+
+  let drivers = DB_findAll(SHEETS.DRIVERS).filter(function(d) { return d.status === 'active'; });
+  // Division scoping
+  if (!Auth_canSeeAllDivisions(session) && session && session.division_id) {
+    drivers = drivers.filter(function(d) { return !d.division_id || d.division_id === session.division_id; });
+  }
+
+  const SCH_ACTIVE = [REQUEST_STATUS.PENDING, REQUEST_STATUS.APPROVED_L1, REQUEST_STATUS.APPROVED_L2, REQUEST_STATUS.APPROVED, REQUEST_STATUS.IN_PROGRESS];
+  const reqs = DB_findAll(SHEETS.REQUESTS).filter(function(r) {
+    return SCH_ACTIVE.indexOf(r.status) >= 0 && r.driver_id;
+  });
+
+  const byDriver = {};
+  reqs.forEach(function(r) {
+    const rs = Utils_combineDateTime(r.depart_date, r.depart_time);
+    const re = Utils_combineDateTime(r.return_date, r.return_time);
+    if (!rs || !re) return;
+    if (!Utils_rangesOverlap(fromD, toD, rs, re)) return;
+    (byDriver[r.driver_id] = byDriver[r.driver_id] || []).push({
+      request_id:     r.id,
+      request_no:     r.request_no,
+      requester_name: r.requester_name,
+      department:     r.department,
+      purpose:        r.purpose,
+      destination:    r.destination,
+      vehicle_plate:  r.vehicle_plate || '',
+      driver_name:    r.driver_name || '',
+      start_iso:      rs.toISOString(),
+      end_iso:        re.toISOString(),
+      status:         r.status
+    });
+  });
+
+  Object.keys(byDriver).forEach(function(k) {
+    byDriver[k].sort(function(a, b) { return String(a.start_iso).localeCompare(String(b.start_iso)); });
+  });
+  drivers.sort(function(a, b) { return String(a.fullname).localeCompare(String(b.fullname)); });
+
+  return ok({
+    range: { from: fromStr, to: toStr },
+    drivers: drivers.map(function(d) {
+      return Object.assign({}, Adapter_driverOut(d), { bookings: byDriver[d.id] || [] });
+    })
   });
 }
 
@@ -334,7 +401,8 @@ function Trip_start(session, payload) {
   if (!Auth_isDriver(session) && !Auth_isManager(session) && !Auth_isAdmin(session)) {
     return err('forbidden', 'ไม่มีสิทธิ์');
   }
-  const r = DB_findById(SHEETS.REQUESTS, payload.requestId);
+  const reqId = payload.requestId || payload.request_id || payload.id;
+  const r = DB_findById(SHEETS.REQUESTS, reqId);
   if (!r) return err('not_found', 'ไม่พบคำขอ');
   if (r.status !== REQUEST_STATUS.APPROVED) return err('invalid_status', 'คำขอยังไม่พร้อมเริ่มเดินทาง');
   if (!payload.start_mileage) return err('invalid_input', 'กรุณากรอกเลขไมล์ออก');
@@ -373,7 +441,8 @@ function Trip_complete(session, payload) {
   if (!Auth_isDriver(session) && !Auth_isManager(session) && !Auth_isAdmin(session)) {
     return err('forbidden', 'ไม่มีสิทธิ์');
   }
-  const r = DB_findById(SHEETS.REQUESTS, payload.requestId);
+  const reqId = payload.requestId || payload.request_id || payload.id;
+  const r = DB_findById(SHEETS.REQUESTS, reqId);
   if (!r) return err('not_found', 'ไม่พบคำขอ');
   if (r.status !== REQUEST_STATUS.IN_PROGRESS) return err('invalid_status', 'คำขอยังไม่ได้อยู่ในระหว่างเดินทาง');
   if (!payload.end_mileage) return err('invalid_input', 'กรุณากรอกเลขไมล์กลับ');
@@ -572,6 +641,7 @@ function User_save(session, payload) {
       status: payload.status || existing.status,
       updated_at: Utils_now()
     };
+    if (payload.signature !== undefined) patch.signature = payload.signature || '';
 
     // ถ้าตั้งรหัสผ่านใหม่
     if (payload.password) {
@@ -603,6 +673,7 @@ function User_save(session, payload) {
       position: payload.position || '',
       phone: payload.phone || '',
       role: payload.role,
+      signature: payload.signature || '',
       status: payload.status || 'active',
       created_at: Utils_now(),
       updated_at: Utils_now()
@@ -610,6 +681,19 @@ function User_save(session, payload) {
     Utils_audit(session.userId, session.username, 'user.create', 'user', created.id, '');
     return ok(Utils_stripUser(created));
   }
+}
+
+function User_saveSignature(session, payload) {
+  const sig = (payload && payload.signature) || '';
+  if (sig && sig.length > 250000) return err('too_large', 'ลายเซ็นใหญ่เกินไป (จำกัดประมาณ 200KB)');
+  if (sig && !/^data:image\/(png|jpeg|jpg|svg\+xml);base64,/i.test(sig)) {
+    return err('invalid_format', 'ต้องเป็นรูปภาพ (data URL)');
+  }
+  const u = DB_findById(SHEETS.USERS, session.userId);
+  if (!u) return err('not_found', 'ไม่พบผู้ใช้');
+  const updated = DB_update(SHEETS.USERS, u.id, { signature: sig, updated_at: Utils_now() });
+  Utils_audit(session.userId, session.username, 'user.saveSignature', 'user', u.id, sig ? 'set' : 'clear');
+  return ok(Utils_stripUser(updated));
 }
 
 function User_delete(session, id) {

@@ -73,6 +73,29 @@ function _divIdByName(name) {
   return d ? d.id : '';
 }
 
+/**
+ * Migration: เพิ่มคอลัมน์ "signature" ใน sheet Users ถ้ายังไม่มี
+ * รันครั้งเดียวจาก GAS Editor หลัง deploy version ที่รองรับลายเซ็น
+ */
+function migrateAddSignatureColumn() {
+  const ss = DB_ss();
+  const sh = ss.getSheetByName(SHEETS.USERS);
+  if (!sh) throw new Error('ไม่พบชีต Users');
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  if (headers.indexOf('signature') >= 0) {
+    console.log('signature column มีอยู่แล้ว — ข้าม');
+    return 'already exists';
+  }
+  // หา column "status" เพื่อแทรกก่อน status (ตาม SCHEMA ใหม่)
+  let insertAt = headers.indexOf('status');
+  if (insertAt < 0) insertAt = headers.length; // ต่อท้ายถ้าไม่เจอ
+  sh.insertColumnBefore(insertAt + 1);
+  sh.getRange(1, insertAt + 1).setValue('signature')
+    .setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+  console.log('เพิ่มคอลัมน์ signature สำเร็จ');
+  return 'OK';
+}
+
 function _seedUsers() {
   if (DB_count(SHEETS.USERS) > 0) return;
 
@@ -87,8 +110,8 @@ function _seedUsers() {
     { username: 'superadmin',    password: 'SuperAdmin@123', fullname: 'นายซุปเปอร์ แอดมิน',         email: ADMIN_EMAIL,                  position: 'ผู้ดูแลระบบ',         role: ROLES.SUPER_ADMIN, division: HEALTH },
     { username: 'divadmin',      password: 'DivAdmin@123',   fullname: 'นายแอดมิน กองสาธารณสุข',     email: 'divadmin@example.com',       position: 'แอดมินกอง',          role: ROLES.DIV_ADMIN,   division: HEALTH },
     { username: 'director',      password: 'Director@123',   fullname: 'นายผู้อำนวยการ ใจดี',         email: 'director@example.com',       position: 'ผอ.กองสาธารณสุขฯ',   role: ROLES.DIRECTOR,    division: HEALTH },
-    { username: 'deputy',        password: 'Deputy@123',     fullname: 'นายปลัด รอบคอบ',             email: 'deputy@example.com',         position: 'ปลัดเทศบาล',         role: ROLES.DEPUTY,      division: HEALTH },
-    { username: 'mayor',         password: 'Mayor@123',      fullname: 'นายกเทศมนตรี เมตตา',         email: 'mayor@example.com',          position: 'นายกเทศมนตรี',       role: ROLES.MAYOR,       division: HEALTH },
+    { username: 'deputy',        password: 'Deputy@123',     fullname: 'นายปลัด รอบคอบ',             email: 'deputy@example.com',         position: 'ปลัดเทศบาลเมืองบางแก้ว', role: ROLES.DEPUTY,      division: HEALTH },
+    { username: 'mayor',         password: 'Mayor@123',      fullname: 'นายกเทศมนตรี เมตตา',         email: 'mayor@example.com',          position: 'นายกเทศมนตรีเมืองบางแก้ว', role: ROLES.MAYOR,       division: HEALTH },
     { username: 'driver',        password: 'Driver@123',     fullname: 'นายขับ ดีมาก',               email: 'driver@example.com',         position: 'พนักงานขับรถ',       role: ROLES.DRIVER,      division: HEALTH },
     { username: 'requester',     password: 'Requester@123',  fullname: 'นายผู้ขอ ใช้รถ',             email: 'requester@example.com',      position: 'เจ้าหน้าที่',         role: ROLES.REQUESTER,   division: HEALTH },
 

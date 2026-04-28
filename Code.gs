@@ -16,6 +16,7 @@ function doGet(e) {
   template.systemName = SYSTEM_NAME;
   return template.evaluate()
     .setTitle(SYSTEM_NAME + ' | ' + ORG_NAME)
+    .setSandboxMode(HtmlService.SandboxMode.IFRAME)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
@@ -92,6 +93,13 @@ function api(action, token, payload) {
         return r.ok ? ok({ items: (r.data || []).map(Adapter_requestOut) }) : r;
       }
 
+      case 'request.printBatch': {
+        const r = Request_printBatch(session, payload);
+        if (!r.ok) return r;
+        const items = (r.data.items || []).map(Adapter_requestDetailOut);
+        return ok({ items: items });
+      }
+
       /* ============ Approval ============ */
       case 'approval.pending': {
         const r = Approval_pendingList(session);
@@ -158,6 +166,9 @@ function api(action, token, payload) {
 
       case 'vehicle.schedule':
         return Vehicle_schedule(session, payload);
+
+      case 'driver.schedule':
+        return Driver_schedule(session, payload);
 
       /* ============ Driver ============ */
       case 'driver.list': {
@@ -228,6 +239,11 @@ function api(action, token, payload) {
 
       case 'user.save': {
         const r = User_save(session, Adapter_userIn(payload));
+        return r.ok ? ok(Adapter_userOut(r.data)) : r;
+      }
+
+      case 'user.saveSignature': {
+        const r = User_saveSignature(session, payload);
         return r.ok ? ok(Adapter_userOut(r.data)) : r;
       }
 

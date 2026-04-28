@@ -147,10 +147,10 @@ function Auth_isRequester(session)  { return !!(session && session.role === ROLE
 // ---------- Legacy aliases (รักษา semantic เดิม) ----------
 // isAdmin    → SuperAdmin
 // isManager  → "ผู้จัดการข้อมูล" = SuperAdmin หรือ DivAdmin
-// isApprover → "ผู้อนุมัติขั้น 1" = SuperAdmin หรือ Director
+// isApprover → "ผู้อนุมัติ" = SuperAdmin / Director (ขั้น 1) / Deputy (ขั้น 2) / Mayor (ขั้น 3)
 function Auth_isAdmin(session)    { return Auth_isSuperAdmin(session); }
 function Auth_isManager(session)  { return Auth_isSuperAdmin(session) || Auth_isDivAdmin(session); }
-function Auth_isApprover(session) { return Auth_isSuperAdmin(session) || Auth_isDirector(session); }
+function Auth_isApprover(session) { return Auth_isSuperAdmin(session) || Auth_isDirector(session) || Auth_isDeputy(session) || Auth_isMayor(session); }
 
 // ---------- Division scoping helpers ----------
 /**

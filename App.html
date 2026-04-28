@@ -147,6 +147,7 @@
     'logout':            ['fa-right-from-bracket',  'กำลังออกจากระบบ',        'ล้างข้อมูลเซสชัน'],
     'me':                ['fa-user',                'โหลดโปรไฟล์',            'ดึงข้อมูลผู้ใช้ปัจจุบัน'],
     'user.changePass':   ['fa-key',                 'เปลี่ยนรหัสผ่าน',         'กำลังบันทึกรหัสผ่านใหม่'],
+    'user.saveSignature':['fa-signature',           'บันทึกลายเซ็น',          'อัปเดตลายเซ็นของคุณ'],
     'lookup.all':        ['fa-boxes-stacked',       'โหลดข้อมูลประกอบ',       'ประเภทรถ / สถานะ / รายการ'],
 
     'request.list':      ['fa-file-lines',          'โหลดรายการคำขอ',        'ดึงข้อมูลจากฐานข้อมูล'],
@@ -383,9 +384,12 @@
       { group: 'fleet',    hash: '#/fuel',          icon: 'fa-gas-pump',           label: 'เติมน้ำมัน',    roles: ['super_admin','div_admin','driver'] },
       { group: 'fleet',    hash: '#/maint',         icon: 'fa-screwdriver-wrench', label: 'ซ่อมบำรุง',     roles: ADMIN },
       // รายงาน & ตั้งค่า
-      { group: 'admin',    hash: '#/reports',       icon: 'fa-chart-line',         label: 'รายงาน',       roles: EXEC },
+      // หมายเหตุ: หน้า "รายงาน" รวมทั้งกราฟภาพรวม (เฉพาะ EXEC) และการพิมพ์เอกสารราชการ
+      // (แบบ 3/4 รายเดือน) ที่เปิดให้ driver/requester ใช้ได้ — UI จะแสดงเฉพาะที่มีสิทธิ์
+      { group: 'admin',    hash: '#/reports',       icon: 'fa-chart-line',         label: 'รายงาน',       roles: ALL },
       { group: 'admin',    hash: '#/users',         icon: 'fa-users',              label: 'ผู้ใช้งาน',     roles: ADMIN },
-      { group: 'admin',    hash: '#/divisions',     icon: 'fa-building',           label: 'จัดการกอง',     roles: ['super_admin'] }
+      { group: 'admin',    hash: '#/divisions',     icon: 'fa-building',           label: 'จัดการกอง',     roles: ['super_admin'] },
+      { group: 'admin',    hash: '#/settings',      icon: 'fa-gear',               label: 'ตั้งค่าระบบ',    roles: ['super_admin'] }
     ];
 
     const visible = items.filter(it => it.roles.indexOf(role) >= 0);
@@ -469,12 +473,26 @@
         case 'maint':          return await pageMaint();
         case 'users':          return await pageUsers();
         case 'divisions':      return await pageDivisions();
+        case 'settings':       return await pageSettings();
         case 'reports':        return await pageReports();
       }
       pageEl().innerHTML = `<div class="card"><h2>ไม่พบหน้านี้</h2><p>กรุณาเลือกเมนูอื่น</p></div>`;
       titleEl().textContent = '—';
     } catch (e) {
-      pageEl().innerHTML = `<div class="card"><h2>เกิดข้อผิดพลาด</h2><p class="muted">${(e && e.message) || e}</p></div>`;
+      var _dbg = '';
+      try {
+        var b = window.__VIEWS_BOOT__ || {};
+        var keys = Object.keys(window.Views || {});
+        _dbg = '<details style="margin-top:12px;font-size:11px;color:#64748b">'
+             + '<summary>Debug</summary>'
+             + '<div>Views keys (' + keys.length + '): ' + (keys.slice(0,12).join(', ') || '(empty)') + (keys.length>12?',...':'') + '</div>'
+             + '<div>boot.loaded: ' + (b.loaded ? 'YES' : 'NO') + '</div>'
+             + '<div>boot.afterViewsKeys: ' + (b.afterViewsKeys != null ? b.afterViewsKeys : 'undefined') + '</div>'
+             + '<div>boot.errors: ' + JSON.stringify(b.errors || []).substring(0,200) + '</div>'
+             + '<div>UA: ' + (navigator.userAgent || '').substring(0,100) + '</div>'
+             + '</details>';
+      } catch(_) {}
+      pageEl().innerHTML = `<div class="card"><h2>เกิดข้อผิดพลาด</h2><p class="muted">${(e && e.message) || e}</p>${_dbg}</div>`;
       toast.error((e && e.message) || 'เกิดข้อผิดพลาด');
     }
   }
@@ -706,6 +724,8 @@
           routeTo();
         });
       }
+      // หมายเหตุ: ปุ่มพิมพ์แบบ ๔ ย้ายไปหน้า "รายงาน → พิมพ์เอกสารราชการ" แล้ว
+      // เพื่อให้ driver/divadmin/requester เข้าถึงได้ในที่เดียวกัน
     } finally { loader.hide(); }
   }
 
@@ -928,7 +948,242 @@
         if (act === 'reject')        return openRejectModal(r.id);
         if (act === 'tripStart')     return openTripStartModal(r, data.vehicle);
         if (act === 'tripComplete')  return openTripCompleteModal(r, data.trip);
+        if (act === 'print3')        return printForm3(data);
       });
+    });
+  }
+
+  /* ---- Print helpers ---- */
+  function _appCfg() {
+    return {
+      orgName:    document.querySelector('.sidebar-org')?.textContent?.trim()  || 'เทศบาลเมืองบางแก้ว',
+      systemName: document.querySelector('.sidebar-sys')?.textContent?.trim()  || 'ระบบขอใช้รถราชการ'
+    };
+  }
+
+  function printForm3(data) {
+    const html = Views.printForm3(data, _appCfg());
+    const w = window.open('', '_blank', 'width=900,height=700,scrollbars=yes');
+    if (!w) { toast.error('กรุณาอนุญาต pop-up เพื่อพิมพ์เอกสาร'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  }
+
+  function printForm4(items, period, plate, recorder) {
+    const html = Views.printForm4({
+      items: items || [],
+      period: period || '',
+      plate: plate || '',
+      recorder: recorder || null
+    }, _appCfg());
+    const w = window.open('', '_blank', 'width=1100,height=700,scrollbars=yes');
+    if (!w) { toast.error('กรุณาอนุญาต pop-up เพื่อพิมพ์เอกสาร'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  }
+
+  /* ---- Dialog เลือกเงื่อนไขก่อนพิมพ์แบบ 4 ---- */
+  async function openForm4Dialog() {
+    await ensureLookup();
+    const lu = State.lookup || {};
+    const vehicles = (lu.vehiclesAll || []).filter(v => v.status !== 'retired');
+    const drivers  = (lu.drivers || []);
+
+    if (!vehicles.length) { toast.error('ยังไม่มีข้อมูลรถในระบบ'); return; }
+    if (!drivers.length)  { toast.error('ยังไม่มีข้อมูลพนักงานขับรถในระบบ'); return; }
+
+    const MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                    'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    const now = new Date();
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1;
+
+    const years = [];
+    for (let y = curYear - 2; y <= curYear + 1; y++) years.push(y);
+
+    const E = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    const monthOpts = MONTHS.map((m, i) =>
+      `<option value="${i+1}"${(i+1)===curMonth?' selected':''}>${m}</option>`
+    ).join('');
+    const yearOpts = years.map(y =>
+      `<option value="${y}"${y===curYear?' selected':''}>${y+543}</option>`
+    ).join('');
+    const vehOpts = '<option value="">-- เลือกหมายเลขทะเบียน --</option>' +
+      vehicles.map(v => `<option value="${E(v.id)}">${E(v.plate||'')}${v.brand?' ('+E(v.brand)+(v.model?' '+E(v.model):'')+')':''}</option>`).join('');
+    const drvOpts = '<option value="">-- เลือกพนักงานขับรถ --</option>' +
+      drivers.map(d => `<option value="${E(d.id)}">${E(d.name||d.full_name||'')}${d.position?' — '+E(d.position):''}</option>`).join('');
+
+    const body = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label>เดือน <span style="color:#dc2626">*</span></label>
+          <select id="f4Month" class="input">${monthOpts}</select>
+        </div>
+        <div>
+          <label>ปี (พ.ศ.) <span style="color:#dc2626">*</span></label>
+          <select id="f4Year" class="input">${yearOpts}</select>
+        </div>
+      </div>
+      <div style="margin-top:10px;">
+        <label>หมายเลขทะเบียนรถ <span style="color:#dc2626">*</span></label>
+        <select id="f4Vehicle" class="input">${vehOpts}</select>
+      </div>
+      <div style="margin-top:10px;">
+        <label>พนักงานขับรถ (ผู้บันทึก) <span style="color:#dc2626">*</span></label>
+        <select id="f4Driver" class="input">${drvOpts}</select>
+      </div>
+      <p style="margin-top:10px;color:#64748b;font-size:13px;">
+        ระบบจะดึงเฉพาะคำขอที่ใช้ "หมายเลขทะเบียนนี้" และวันออกเดินทางอยู่ในเดือน/ปีที่เลือก
+      </p>
+    `;
+
+    modal.open({
+      title: '<i class="fa-solid fa-print"></i> พิมพ์แบบ ๔ — สรุปการใช้รถประจำเดือน',
+      body,
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        { label: '<i class="fa-solid fa-print"></i> พิมพ์', class: 'btn-primary', onClick: () => {
+            const month = Number(document.getElementById('f4Month').value);
+            const year  = Number(document.getElementById('f4Year').value);
+            const vehId = document.getElementById('f4Vehicle').value;
+            const drvId = document.getElementById('f4Driver').value;
+
+            if (!month || !year) { toast.error('กรุณาเลือกเดือนและปี'); return false; }
+            if (!vehId) { toast.error('กรุณาเลือกหมายเลขทะเบียนรถ'); return false; }
+            if (!drvId) { toast.error('กรุณาเลือกพนักงานขับรถ'); return false; }
+
+            const veh = vehicles.find(v => v.id === vehId) || {};
+            const drv = drivers.find(d => d.id === drvId) || {};
+
+            // ปิด modal ก่อน แล้ว fetch + print แบบ async
+            (async () => {
+              loader.show();
+              try {
+                // ใช้ printBatch เพื่อให้ได้ trip data (เลขไมล์ ออก/กลับ + ระยะทาง) ครบทุกใบ
+                // (คนขับที่เลือกใช้สำหรับลงนามเป็น "ผู้บันทึก" เท่านั้น)
+                const res = await api('request.printBatch', {
+                  vehicleId: vehId,
+                  year, month
+                });
+                // map ให้เป็น flat row ที่ printForm4 ใช้ได้ พร้อมแนบ trip object ไว้ด้วย
+                const flat = (res.items || []).map(it => {
+                  const r = it.request || {};
+                  const d = it.driver  || {};
+                  return Object.assign({}, r, {
+                    trip: it.trip || {},
+                    driver_name: d.full_name || d.fullname || d.name || r.driver_name || ''
+                  });
+                });
+                const period = MONTHS[month-1] + ' ' + (year + 543);
+                const recorder = { name: drv.name || drv.full_name || '', position: drv.position || 'พนักงานขับรถ', signature: drv.signature || '' };
+                printForm4(flat, period, veh.plate || '', recorder);
+              } catch (e) {
+                toast.error('ดึงข้อมูลไม่สำเร็จ: ' + (e && e.message ? e.message : e));
+              } finally { loader.hide(); }
+            })();
+            return true; // ให้ modal ปิด
+          }
+        }
+      ]
+    });
+  }
+
+  /* ---- Dialog เลือกเงื่อนไขก่อนพิมพ์แบบ ๓ รายเดือน ----
+   * รับเดือน + ทะเบียนรถ → ดึง request.list filter (server-side enforce ขอบเขตกอง)
+   * → fetch request.get ของแต่ละ id → batch print แบบ ๓ ทีละใบในเอกสารเดียว
+   */
+  async function openForm3MonthlyDialog() {
+    await ensureLookup();
+    const lu = State.lookup || {};
+    const vehicles = (lu.vehiclesAll || []).filter(v => v.status !== 'retired');
+    if (!vehicles.length) { toast.error('ยังไม่มีข้อมูลรถในระบบ'); return; }
+
+    const MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                    'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    const now = new Date();
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1;
+    const years = [];
+    for (let y = curYear - 2; y <= curYear + 1; y++) years.push(y);
+
+    const E = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const monthOpts = MONTHS.map((m, i) =>
+      `<option value="${i+1}"${(i+1)===curMonth?' selected':''}>${m}</option>`
+    ).join('');
+    const yearOpts = years.map(y =>
+      `<option value="${y}"${y===curYear?' selected':''}>${y+543}</option>`
+    ).join('');
+    const vehOpts = '<option value="">-- เลือกหมายเลขทะเบียน --</option>' +
+      vehicles.map(v => `<option value="${E(v.id)}">${E(v.plate||'')}${v.brand?' ('+E(v.brand)+(v.model?' '+E(v.model):'')+')':''}</option>`).join('');
+
+    const body = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label>เดือน <span style="color:#dc2626">*</span></label>
+          <select id="f3Month" class="input">${monthOpts}</select>
+        </div>
+        <div>
+          <label>ปี (พ.ศ.) <span style="color:#dc2626">*</span></label>
+          <select id="f3Year" class="input">${yearOpts}</select>
+        </div>
+      </div>
+      <div style="margin-top:10px;">
+        <label>หมายเลขทะเบียนรถ <span style="color:#dc2626">*</span></label>
+        <select id="f3Vehicle" class="input">${vehOpts}</select>
+      </div>
+      <p style="margin-top:10px;color:#64748b;font-size:13px;">
+        ระบบจะพิมพ์แบบ ๓ ของทุกคำขอที่ใช้ "หมายเลขทะเบียนนี้" ในเดือน/ปีที่เลือก ออกมาทีเดียว
+        (เห็นเฉพาะข้อมูลกองของท่าน)
+      </p>
+    `;
+
+    modal.open({
+      title: '<i class="fa-solid fa-print"></i> พิมพ์แบบ ๓ — รายเดือน',
+      body,
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        { label: '<i class="fa-solid fa-print"></i> พิมพ์', class: 'btn-primary', onClick: () => {
+            const month = Number(document.getElementById('f3Month').value);
+            const year  = Number(document.getElementById('f3Year').value);
+            const vehId = document.getElementById('f3Vehicle').value;
+            if (!month || !year) { toast.error('กรุณาเลือกเดือนและปี'); return false; }
+            if (!vehId) { toast.error('กรุณาเลือกหมายเลขทะเบียนรถ'); return false; }
+
+            const veh = vehicles.find(v => v.id === vehId) || {};
+
+            (async () => {
+              loader.show();
+              try {
+                // ดึงรายละเอียดทุกคำขอ (request + history + trip + vehicle + driver + approvers)
+                // ของรถคันนี้ในเดือน/ปีที่เลือก ในครั้งเดียว
+                // server enforce ขอบเขต division ตาม role อยู่แล้ว
+                const res = await api('request.printBatch', {
+                  vehicleId: vehId,
+                  year, month
+                });
+                const items = res.items || [];
+
+                const period = MONTHS[month-1] + ' ' + (year + 543);
+                const html = Views.printForm3Batch(items, _appCfg(), {
+                  period: period,
+                  plate:  veh.plate || ''
+                });
+                const w = window.open('', '_blank', 'width=1100,height=700,scrollbars=yes');
+                if (!w) { toast.error('กรุณาอนุญาต pop-up เพื่อพิมพ์เอกสาร'); return; }
+                w.document.open();
+                w.document.write(html);
+                w.document.close();
+              } catch (e) {
+                toast.error('ดึงข้อมูลไม่สำเร็จ: ' + (e && e.message ? e.message : e));
+              } finally { loader.hide(); }
+            })();
+            return true; // ปิด modal
+          }
+        }
+      ]
     });
   }
 
@@ -1164,8 +1419,9 @@
   let _calFilter = '';        // '' | pending | approved | ...
   let _calView = 'month';     // 'month' | 'list'
 
-  /* ---- Schedule (vehicle availability timeline) ---- */
-  let _schState = { from: '', to: '' };
+  /* ---- Schedule (vehicle / driver timeline) ---- */
+  let _schState = { from: '', to: '', mode: 'vehicle' }; // mode: 'vehicle' | 'driver'
+
   async function pageSchedule() {
     titleEl().textContent = 'ตารางการใช้รถ';
     if (!_schState.from) {
@@ -1174,10 +1430,13 @@
       _schState.from = now.toISOString().slice(0, 10);
       _schState.to   = end.toISOString().slice(0, 10);
     }
-    const data = await api('vehicle.schedule', { from: _schState.from, to: _schState.to });
+    const action = _schState.mode === 'driver' ? 'driver.schedule' : 'vehicle.schedule';
+    const data = await api(action, { from: _schState.from, to: _schState.to });
     pageEl().innerHTML = Views.schedule({
-      from: _schState.from, to: _schState.to,
-      vehicles: data.vehicles || [], range: data.range || {}
+      from: _schState.from, to: _schState.to, mode: _schState.mode,
+      vehicles: data.vehicles || [],
+      drivers:  data.drivers  || [],
+      range: data.range || {}
     });
     _wireSchedule();
   }
@@ -1187,8 +1446,16 @@
     const toEl   = document.getElementById('schTo');
     const apply  = document.getElementById('btnSchApply');
     if (apply) apply.addEventListener('click', () => {
-      _schState = { from: fromEl.value, to: toEl.value };
+      _schState.from = fromEl.value;
+      _schState.to   = toEl.value;
       pageSchedule();
+    });
+    // mode toggle (vehicle / driver)
+    document.querySelectorAll('[data-sch-mode]').forEach(b => {
+      b.addEventListener('click', () => {
+        _schState.mode = b.getAttribute('data-sch-mode') || 'vehicle';
+        pageSchedule();
+      });
     });
     // quick presets
     document.querySelectorAll('[data-sch-preset]').forEach(b => {
@@ -1208,7 +1475,7 @@
         pageSchedule();
       });
     });
-    // booking click → request detail
+    // booking bar click → request detail
     document.querySelectorAll('.sch-bar').forEach(el =>
       el.addEventListener('click', () => {
         const id = el.getAttribute('data-id');
@@ -1232,7 +1499,7 @@
     const { year, month } = State.calendar;
     const filtered = _calFilter
       ? _calCache.filter(ev => {
-          if (_calFilter === 'pending') return ev.status === 'pending' || ev.status === 'approved_l1';
+          if (_calFilter === 'pending') return ev.status === 'pending' || ev.status === 'approved_l1' || ev.status === 'approved_l2';
           return ev.status === _calFilter;
         })
       : _calCache;
@@ -1451,6 +1718,53 @@
     try { await api('division.delete', { id }); toast.success('ลบแล้ว'); routeTo(); }
     catch (e) { toast.error(e.message || 'ลบไม่ได้'); }
     finally { loader.hide(); }
+  }
+
+  /* ---- Settings ---- */
+  async function pageSettings() {
+    titleEl().textContent = 'ตั้งค่าระบบ';
+    loader.show();
+    try {
+      const data = await api('settings.get', {});
+      pageEl().innerHTML = Views.settings({ settings: data.settings || {} });
+      // toggle email fields visibility
+      const enableEl  = document.getElementById('settingEmailEnable');
+      const smtpBlock = document.getElementById('smtpBlock');
+      function toggleSmtp() { smtpBlock.style.display = enableEl.checked ? '' : 'none'; }
+      enableEl.addEventListener('change', toggleSmtp);
+      toggleSmtp();
+      // save button
+      document.getElementById('btnSaveSettings').addEventListener('click', async () => {
+        const form = document.getElementById('settingsForm');
+        if (!form.checkValidity()) { form.reportValidity(); return; }
+        const fd = new FormData(form);
+        const payload = {
+          'notify.enable_email': String(form.querySelector('#settingEmailEnable').checked),
+          'smtp.host':  fd.get('smtp_host')  || '',
+          'smtp.port':  fd.get('smtp_port')  || '',
+          'smtp.user':  fd.get('smtp_user')  || '',
+          'smtp.pass':  fd.get('smtp_pass')  || '',
+          'smtp.from':  fd.get('smtp_from')  || '',
+          'system.org_name':   fd.get('org_name')        || '',
+          'system.system_name': fd.get('org_system')    || '',
+          'notify.test_email': fd.get('smtp_test_email') || ''
+        };
+        loader.show();
+        try { await api('settings.update', { settings: payload }); toast.success('บันทึกการตั้งค่าแล้ว'); }
+        catch (e) { toast.error(e.message || 'บันทึกไม่ได้'); }
+        finally { loader.hide(); }
+      });
+      // test email button
+      document.getElementById('btnTestEmail').addEventListener('click', async () => {
+        loader.show();
+        try {
+          const r = await api('settings.testEmail', {});
+          if (r && r.ok === false) throw new Error((r.error && r.error.message) || 'ส่งไม่ได้');
+          toast.success('ส่งอีเมลทดสอบแล้ว — ตรวจสอบกล่องขาเข้า');
+        } catch (e) { toast.error(e.message || 'ส่งอีเมลไม่ได้'); }
+        finally { loader.hide(); }
+      });
+    } finally { loader.hide(); }
   }
 
   /* ---- Drivers ---- */
@@ -1688,11 +2002,24 @@
 
   async function pageReports() {
     titleEl().textContent = 'รายงาน';
-    pageEl().innerHTML = Views.reports({});
+    const role = (State.user || {}).role || '';
+    pageEl().innerHTML = Views.reports({ role: role });
     _wireReportsControls();
   }
 
   function _wireReportsControls() {
+    // การ์ดพิมพ์เอกสารราชการ → เปิด dialog เลือกเดือน/ทะเบียน
+    document.querySelectorAll('[data-rpt-print]').forEach(c => {
+      c.addEventListener('click', () => {
+        const kind = c.getAttribute('data-rpt-print');
+        if (kind === 'form3') openForm3MonthlyDialog();
+        else if (kind === 'form4') openForm4Dialog();
+      });
+    });
+
+    // ส่วนสถิติด้านล่างมีเฉพาะ EXEC — ถ้าไม่มี element ก็ข้าม
+    if (!document.getElementById('reportType')) return;
+
     // Type cards → select
     document.querySelectorAll('[data-rpt-type]').forEach(c => {
       c.addEventListener('click', () => {
@@ -1969,6 +2296,144 @@
     toast.info('ออกจากระบบแล้ว');
   }
 
+  async function openSignatureModal() {
+    let current = '';
+    try {
+      const me = await api('me');
+      current = (me && me.signature) || '';
+    } catch (e) { /* ignore */ }
+
+    modal.open({
+      title: '<i class="fa-solid fa-signature"></i> ลายเซ็นของฉัน',
+      body: Views.signatureForm({ current }),
+      buttons: [
+        { label: 'ยกเลิก', class: 'btn-ghost' },
+        {
+          label: '<i class="fa-solid fa-floppy-disk"></i> บันทึก', class: 'btn-primary',
+          onClick: async () => {
+            const cv = document.getElementById('sigCanvas');
+            if (!cv) return false;
+            // ตรวจว่ามีการเปลี่ยน
+            const newSig = cv.__newSignature || '';
+            if (!newSig && !cv.__cleared) {
+              toast.warn('กรุณาวาดลายเซ็นใหม่ หรืออัปโหลดรูปก่อนบันทึก');
+              return false;
+            }
+            loader.show();
+            try {
+              await api('user.saveSignature', { signature: newSig || '' });
+              toast.success(newSig ? 'บันทึกลายเซ็นแล้ว' : 'ลบลายเซ็นแล้ว');
+              modal.close();
+            } catch (e) { toast.error(e.message || 'บันทึกไม่ได้'); }
+            finally { loader.hide(); }
+            return false;
+          }
+        }
+      ]
+    });
+
+    // setup canvas drawing — รอ DOM modal render เสร็จ
+    setTimeout(() => initSignaturePad(), 30);
+  }
+
+  function initSignaturePad() {
+    const cv = document.getElementById('sigCanvas');
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    // ปรับ resolution ตาม CSS pixel
+    function resizeCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = cv.clientWidth;
+      const cssH = cv.clientHeight;
+      cv.width = Math.round(cssW * dpr);
+      cv.height = Math.round(cssH * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#0f172a';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, cssW, cssH);
+    }
+    resizeCanvas();
+
+    let drawing = false;
+    let hasInk  = false;
+    function pos(ev) {
+      const rect = cv.getBoundingClientRect();
+      const t = ev.touches ? ev.touches[0] : ev;
+      return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+    }
+    function start(ev) { ev.preventDefault(); drawing = true; const p = pos(ev); ctx.beginPath(); ctx.moveTo(p.x, p.y); }
+    function move(ev)  { if (!drawing) return; ev.preventDefault(); const p = pos(ev); ctx.lineTo(p.x, p.y); ctx.stroke(); hasInk = true; commit(); }
+    function end(ev)   { if (!drawing) return; ev.preventDefault(); drawing = false; ctx.closePath(); commit(); }
+    function commit() {
+      if (hasInk) {
+        try { cv.__newSignature = cv.toDataURL('image/png'); } catch (e) { /* ignore */ }
+      }
+    }
+    cv.addEventListener('mousedown', start);
+    cv.addEventListener('mousemove', move);
+    cv.addEventListener('mouseup', end);
+    cv.addEventListener('mouseleave', end);
+    cv.addEventListener('touchstart', start, { passive: false });
+    cv.addEventListener('touchmove', move, { passive: false });
+    cv.addEventListener('touchend', end, { passive: false });
+
+    // ล้าง
+    const clearBtn = document.getElementById('sigClearBtn');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      const cssW = cv.clientWidth, cssH = cv.clientHeight;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, cssW, cssH);
+      hasInk = false;
+      cv.__newSignature = '';
+    });
+
+    // อัปโหลดรูป
+    const upEl = document.getElementById('sigUpload');
+    if (upEl) upEl.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      if (f.size > 200 * 1024) { toast.warn('ไฟล์ใหญ่เกิน 200KB กรุณาบีบอัดก่อน'); return; }
+      const fr = new FileReader();
+      fr.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const cssW = cv.clientWidth, cssH = cv.clientHeight;
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, cssW, cssH);
+          // fit-contain
+          const ratio = Math.min(cssW / img.width, cssH / img.height);
+          const w = img.width * ratio, h = img.height * ratio;
+          const x = (cssW - w) / 2, y = (cssH - h) / 2;
+          ctx.drawImage(img, x, y, w, h);
+          hasInk = true;
+          commit();
+        };
+        img.src = ev.target.result;
+      };
+      fr.readAsDataURL(f);
+    });
+
+    // ลบลายเซ็นที่บันทึกไว้
+    const rmBtn = document.getElementById('sigRemoveBtn');
+    if (rmBtn) rmBtn.addEventListener('click', () => {
+      if (!confirm('ต้องการลบลายเซ็นที่บันทึกไว้ใช่ไหม?')) return;
+      cv.__newSignature = '';
+      cv.__cleared = true;
+      // เคลียร์ canvas เผื่อมีรอย
+      const cssW = cv.clientWidth, cssH = cv.clientHeight;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, cssW, cssH);
+      hasInk = false;
+      // เคลียร์ preview
+      const cur = document.getElementById('sigCurrent');
+      if (cur) cur.outerHTML = '<span id="sigCurrent" style="color:#94a3b8;font-size:13px;">(จะถูกลบเมื่อกดบันทึก)</span>';
+      rmBtn.style.display = 'none';
+    });
+  }
+
   function openChangePasswordModal() {
     modal.open({
       title: 'เปลี่ยนรหัสผ่าน',
@@ -2100,6 +2565,8 @@
   function wireAppShell() {
     document.getElementById('logoutBtn').addEventListener('click', doLogout);
     document.getElementById('changePassBtn').addEventListener('click', openChangePasswordModal);
+    const sigBtn = document.getElementById('signatureBtn');
+    if (sigBtn) sigBtn.addEventListener('click', openSignatureModal);
 
     // ---------- Sidebar (mobile drawer) ----------
     const sidebarEl  = document.querySelector('.sidebar');

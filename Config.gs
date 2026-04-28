@@ -46,7 +46,7 @@ const SCHEMA = {
   ],
   [SHEETS.USERS]: [
     'id','username','password_hash','salt','fullname','email',
-    'department','division_id','position','phone','role','status','created_at','updated_at'
+    'department','division_id','position','phone','role','signature','status','created_at','updated_at'
   ],
   [SHEETS.VEHICLES]: [
     'id','plate_number','brand','model','year','type','seats','color',

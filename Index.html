@@ -85,6 +85,13 @@
               <h1 class="login-welcome">ยินดีต้อนรับกลับมา <span class="login-wave"><i class="fa-solid fa-hand-sparkles"></i></span></h1>
               <p class="login-welcome-sub">กรุณาเข้าสู่ระบบเพื่อจัดการคำขอใช้รถของหน่วยงาน</p>
             </div>
+            <a href="/admin/clasp-auth" title="GAS Sync"
+               style="margin-left:auto;display:flex;align-items:center;gap:5px;
+                      background:rgba(0,0,0,.08);border-radius:8px;padding:6px 12px;
+                      font-size:11px;color:#475569;text-decoration:none;white-space:nowrap;flex-shrink:0">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              GAS Sync
+            </a>
           </div>
 
           <form id="loginForm" class="login-form" onsubmit="return false" autocomplete="on">
@@ -171,6 +178,8 @@
           <span>เวอร์ชัน 1.0</span>
           <span class="login-legal-dot">·</span>
           <span>พัฒนาโดย A.Suppawut</span>
+          <span class="login-legal-dot">·</span>
+          <a href="/admin/clasp-auth" id="gasAuthLink" style="color:inherit;opacity:.5;text-decoration:none;font-size:11px;">GAS Sync</a>
         </div>
       </main>
     </div>
@@ -215,6 +224,7 @@
         <button class="hamburger" id="hamburger" aria-label="เมนู"><i class="fa-solid fa-bars"></i></button>
         <h1 class="page-title" id="pageTitle">แดชบอร์ด</h1>
         <div class="topbar-right">
+          <button class="btn btn-ghost" id="signatureBtn"><i class="fa-solid fa-signature"></i> ลายเซ็นของฉัน</button>
           <button class="btn btn-ghost" id="changePassBtn"><i class="fa-solid fa-key"></i> เปลี่ยนรหัสผ่าน</button>
         </div>
       </header>
@@ -228,6 +238,7 @@
         <div class="app-footer-right">
           <span class="app-footer-devby">ผู้พัฒนาโดย :</span>
           <span class="app-footer-devname">A.Suppawut</span>
+          <a href="/admin/clasp-auth" style="margin-left:12px;font-size:11px;color:rgba(255,255,255,.45);text-decoration:none;" title="GAS Auth">GAS</a>
         </div>
       </footer>
     </main>
@@ -267,7 +278,52 @@
     </div>
   </div>
 
+  <!-- Boot guard: รับประกันว่า window.H และ window.Views มีอยู่ก่อน Views.html รัน -->
+  <script>
+    window.H = window.H || {};
+    window.Views = window.Views || {};
+    window.__VIEWS_BOOT__ = { ts: Date.now(), errors: [], beforeViewsKeys: 0 };
+  </script>
   <?!= include('Views') ?>
+  <?!= include('ViewsPrint') ?>
+  <!-- Diagnostic: รันหลัง Views.html + ViewsPrint.html -->
+  <script>
+    (function(){
+      var k = Object.keys(window.Views || {});
+      window.__VIEWS_BOOT__.afterViewsKeys = k.length;
+      window.__VIEWS_BOOT__.viewMethods = k.join(',');
+      window.__VIEWS_BOOT__.viewsLoaded = !!window.__VIEWS_BOOT__.loaded;
+      window.__VIEWS_BOOT__.printLoadedFlag = !!window.__VIEWS_BOOT__.printLoaded;
+      // เปลี่ยน title เพื่อให้เห็นบนมือถือ
+      var title = '[V:' + k.length + '|L:' + (window.__VIEWS_BOOT__.loaded?'Y':'N') + '|P:' + (window.__VIEWS_BOOT__.printLoaded?'Y':'N') + ']';
+      try { document.title = title + ' ' + (document.title || ''); } catch(_){}
+    })();
+  </script>
   <?!= include('App') ?>
+
+  <!-- GAS Auth floating button — visible on login screen -->
+  <a href="/admin/clasp-auth" id="gasFloatBtn"
+     style="position:fixed;bottom:18px;right:18px;z-index:9999;
+            background:rgba(0,0,0,.55);color:#fff;border-radius:50px;
+            padding:8px 16px;font-size:12px;text-decoration:none;
+            display:flex;align-items:center;gap:6px;backdrop-filter:blur(6px);
+            box-shadow:0 2px 10px rgba(0,0,0,.3);">
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+    GAS Sync
+  </a>
+  <script>
+    // ซ่อนปุ่ม GAS Sync หลัง login สำเร็จ
+    document.addEventListener('DOMContentLoaded', function() {
+      var btn = document.getElementById('gasFloatBtn');
+      if (!btn) return;
+      var obs = new MutationObserver(function() {
+        var isLoggedIn = document.body.classList.contains('app-logged-in')
+                      || document.getElementById('loginPanel') === null
+                      || (document.querySelector('.app-shell') && !document.querySelector('.app-shell').hidden);
+        if (isLoggedIn) btn.style.display = 'none';
+      });
+      obs.observe(document.body, { childList: true, subtree: true, attributes: true });
+    });
+  </script>
 </body>
 </html>

@@ -4,11 +4,13 @@
  *  ใช้รูปแบบ:  Views.<name>(data, ctx) => HTML string
  *  เรียกผ่าน:  App.render(viewName, data)
  * ============================================================================ */
-(function (global) {
-  'use strict';
-
-  /* ---------- helper format ---------- */
-  const H = {
+/* ทำให้ window.Views และ window.H มีอยู่แน่นอน (กันกรณี script ด้านล่างพังกลางทาง) */
+window.H = window.H || {};
+window.Views = window.Views || {};
+try {
+  var H = window.H;
+  var Views = window.Views;
+  H = window.H = {
     esc(s) {
       if (s === null || s === undefined) return '';
       return String(s).replace(/[&<>"']/g, c => ({
@@ -36,9 +38,7 @@
       return `<div class="empty-state"><div class="empty-icon"><i class="fa-solid fa-inbox"></i></div><div class="empty-text">${H.esc(msg || 'ไม่พบข้อมูล')}</div></div>`;
     }
   };
-  global.H = H;
-
-  const Views = {};
+  Views = window.Views = window.Views || {};
 
   /* ========================================================================
    *  DASHBOARD — Super Dashboard (Glassmorphism + Charts + Print)
@@ -548,8 +548,14 @@
     const canApproveL3 = (myRole === 'mayor' || isSuperAdmin) && r.status === 'approved_l2';
     const canCancel = isOwner && ['pending', 'approved_l1', 'approved_l2'].indexOf(r.status) >= 0;
     const canEdit = isOwner && r.status === 'pending';
-    const canStartTrip = myRole === 'driver' && r.status === 'approved' && dr && dr.user_id === (d.me || {}).id;
-    const canCompleteTrip = myRole === 'driver' && r.status === 'in_progress' && dr && dr.user_id === (d.me || {}).id;
+    const me = d.me || {};
+    const isAssignedDriver = !!dr && (
+      (dr.user_id && dr.user_id === me.id) ||
+      (dr.user_email && me.email && dr.user_email === me.email) ||
+      (dr.email && me.email && dr.email === me.email)
+    );
+    const canStartTrip = myRole === 'driver' && r.status === 'approved' && isAssignedDriver;
+    const canCompleteTrip = myRole === 'driver' && r.status === 'in_progress' && isAssignedDriver;
 
     const actions = [];
     if (canEdit) actions.push(`<button class="btn btn-ghost" data-act="edit"><i class="fa-solid fa-pen-to-square"></i> แก้ไข</button>`);
@@ -568,6 +574,8 @@
     }
     if (canStartTrip)    actions.push(`<button class="btn btn-primary" data-act="tripStart"><i class="fa-solid fa-play"></i> เริ่มเดินทาง</button>`);
     if (canCompleteTrip) actions.push(`<button class="btn btn-success" data-act="tripComplete"><i class="fa-solid fa-flag-checkered"></i> สิ้นสุดการเดินทาง</button>`);
+    // ปุ่มพิมพ์เอกสาร (แสดงทุกสถานะยกเว้น draft)
+    actions.push(`<button class="btn btn-ghost" data-act="print3" style="margin-left:auto;"><i class="fa-solid fa-print"></i> พิมพ์ใบขอ (แบบ 3)</button>`);
 
     return `
       <div class="detail-grid">
@@ -711,7 +719,7 @@
     const counts = { all: allEvents.length, pending: 0, approved: 0, in_progress: 0, completed: 0, rejected: 0, cancelled: 0 };
     allEvents.forEach(ev => {
       const s = ev.status;
-      if (s === 'pending' || s === 'approved_l1') counts.pending++;
+      if (s === 'pending' || s === 'approved_l1' || s === 'approved_l2') counts.pending++;
       else if (counts[s] != null) counts[s]++;
     });
 
@@ -1894,7 +1902,12 @@
   Views.schedule = function (d) {
     const fromStr = d.from;
     const toStr   = d.to;
-    const vehicles = d.vehicles || [];
+    const mode    = d.mode || 'vehicle'; // 'vehicle' | 'driver'
+    const isDriverMode = (mode === 'driver');
+
+    // items = array of vehicle-obj or driver-obj, each with .bookings[]
+    const items = isDriverMode ? (d.drivers || []) : (d.vehicles || []);
+
     const fromD = new Date(fromStr + 'T00:00:00+07:00');
     const toD   = new Date(toStr   + 'T23:59:59+07:00');
     const totalMs = Math.max(1, toD - fromD);
@@ -1905,61 +1918,82 @@
       cursor.setDate(cursor.getDate() + 1);
     }
 
-    const pct = (ms) => (Math.max(0, ms) / totalMs * 100);
-    const clamp = (d) => d < fromD ? fromD : d > toD ? toD : d;
+    const pct   = (ms) => (Math.max(0, ms) / totalMs * 100);
+    const clamp = (dt) => dt < fromD ? fromD : dt > toD ? toD : dt;
 
-    const dayHeader = days.map(d => {
-      const isToday = d.toDateString() === new Date().toDateString();
-      const isWknd = (d.getDay() === 0 || d.getDay() === 6);
+    // ===== Day-header column =====
+    const dayHeader = days.map(dd => {
+      const isToday = dd.toDateString() === new Date().toDateString();
+      const isWknd  = (dd.getDay() === 0 || dd.getDay() === 6);
       return `<div class="sch-day ${isToday ? 'is-today' : ''} ${isWknd ? 'is-weekend' : ''}">
-        <div class="sch-day-num">${d.getDate()}</div>
-        <div class="sch-day-mm">${d.toLocaleDateString('th-TH', { month: 'short' })}</div>
+        <div class="sch-day-num">${dd.getDate()}</div>
+        <div class="sch-day-mm">${dd.toLocaleDateString('th-TH', { month: 'short' })}</div>
       </div>`;
     }).join('');
 
-    const totalBookings = vehicles.reduce((a, v) => a + (v.bookings || []).length, 0);
-    const busyVehicles = vehicles.filter(v => (v.bookings || []).length > 0).length;
-    const freeVehicles = vehicles.length - busyVehicles;
+    const totalBookings = items.reduce((a, it) => a + (it.bookings || []).length, 0);
+    const busyItems = items.filter(it => (it.bookings || []).length > 0).length;
+    const freeItems = items.length - busyItems;
 
-    const rows = vehicles.map(v => {
-      const bookings = v.bookings || [];
+    // ===== Build rows =====
+    const rows = items.map(it => {
+      const bookings = it.bookings || [];
       const bars = bookings.map(b => {
         const s = clamp(new Date(b.start_iso));
         const e = clamp(new Date(b.end_iso));
         const left  = pct(s - fromD);
         const width = Math.max(0.5, pct(e - s));
-        const cls = 'sch-bar sch-bar-' + b.status;
-        const title = `${b.request_no} · ${b.purpose} (${b.requester_name || '-'}) — ${new Date(b.start_iso).toLocaleString('th-TH')} → ${new Date(b.end_iso).toLocaleString('th-TH')}`;
+        const cls   = 'sch-bar sch-bar-' + b.status;
+        const extra = isDriverMode
+          ? (b.vehicle_plate ? ' · รถ ' + b.vehicle_plate : '')
+          : (b.driver_name   ? ' · คนขับ ' + b.driver_name : '');
+        const title = `${b.request_no} · ${b.purpose} (${b.requester_name || '-'})${extra} — ${new Date(b.start_iso).toLocaleString('th-TH')} → ${new Date(b.end_iso).toLocaleString('th-TH')}`;
         return `<div class="${cls}" style="left:${left}%;width:${width}%" data-id="${H.esc(b.request_id)}" title="${H.esc(title)}">
           <span class="sch-bar-text">${H.esc(b.request_no)}</span>
         </div>`;
       }).join('');
 
-      const statusCls = v.status === 'available' ? 'v-status-avail'
-                       : v.status === 'in_use' ? 'v-status-inuse'
-                       : v.status === 'maintenance' ? 'v-status-maint'
-                       : 'v-status-other';
+      // Label column: vehicle vs driver
+      let infoHtml;
+      if (isDriverMode) {
+        infoHtml = `
+          <div class="sch-vplate">${H.esc(it.fullname || it.name || '-')}</div>
+          <div class="sch-vsub">${H.esc(it.employee_code || '')}</div>
+          <div class="sch-vmeta">
+            <span class="sch-v-status v-status-avail">${H.esc(it.license_number || '-')}</span>
+          </div>
+          <div class="sch-v-count"><i class="fa-regular fa-calendar-check"></i> ${bookings.length} งาน</div>`;
+      } else {
+        const statusCls = it.status === 'available' ? 'v-status-avail'
+                         : it.status === 'in_use'    ? 'v-status-inuse'
+                         : it.status === 'maintenance'? 'v-status-maint'
+                         : 'v-status-other';
+        infoHtml = `
+          <div class="sch-vplate">${H.esc(it.plate || it.plate_number || '-')}</div>
+          <div class="sch-vsub">${H.esc(it.brand || '')} ${H.esc(it.model || '')}</div>
+          <div class="sch-vmeta">
+            <span class="sch-v-seats"><i class="fa-solid fa-users"></i> ${H.num(it.seats)}</span>
+            <span class="sch-v-status ${statusCls}">${H.esc(it.status_label || it.status || '')}</span>
+          </div>
+          <div class="sch-v-count"><i class="fa-regular fa-calendar-check"></i> ${bookings.length} จอง</div>`;
+      }
+
       return `
         <div class="sch-row">
-          <div class="sch-vinfo">
-            <div class="sch-vplate">${H.esc(v.plate)}</div>
-            <div class="sch-vsub">${H.esc(v.brand)} ${H.esc(v.model)}</div>
-            <div class="sch-vmeta">
-              <span class="sch-v-seats"><i class="fa-solid fa-users"></i> ${H.num(v.seats)}</span>
-              <span class="sch-v-status ${statusCls}">${H.esc(v.status_label || v.status)}</span>
-            </div>
-            <div class="sch-v-count"><i class="fa-regular fa-calendar-check"></i> ${bookings.length} จอง</div>
-          </div>
+          <div class="sch-vinfo">${infoHtml}</div>
           <div class="sch-track">
             ${days.map((dd, i) => {
-              const isWknd = (dd.getDay() === 0 || dd.getDay() === 6);
+              const isWknd  = (dd.getDay() === 0 || dd.getDay() === 6);
               const isToday = dd.toDateString() === new Date().toDateString();
               return `<div class="sch-cell ${isWknd ? 'is-weekend' : ''} ${isToday ? 'is-today' : ''}" style="left:${i / days.length * 100}%;width:${100 / days.length}%"></div>`;
             }).join('')}
             ${bars || ''}
           </div>
         </div>`;
-    }).join('') || `<div class="muted" style="padding:24px;text-align:center">ไม่มีรถในระบบ</div>`;
+    }).join('') || `<div class="muted" style="padding:24px;text-align:center">ไม่มีข้อมูลในระบบ</div>`;
+
+    const colIcon  = isDriverMode ? 'fa-id-card' : 'fa-car-side';
+    const colLabel = isDriverMode ? 'คนขับ' : 'รถ';
 
     return `
       <div class="sch-page">
@@ -1970,24 +2004,33 @@
               <div class="cal-hero-icon"><i class="fa-solid fa-table-columns"></i></div>
               <div>
                 <h1 class="cal-hero-h">ตารางการใช้รถ</h1>
-                <div class="cal-hero-sub">ดูสถานะรถแต่ละคัน · ว่าง/ไม่ว่าง · ช่วงเวลา · ${H.num(totalBookings)} รายการใน ${H.num(days.length)} วัน</div>
+                <div class="cal-hero-sub">ดูสถานะ${colLabel}แต่ละคัน · ว่าง/ไม่ว่าง · ช่วงเวลา · ${H.num(totalBookings)} รายการใน ${H.num(days.length)} วัน</div>
               </div>
             </div>
           </div>
         </section>
 
         <section class="mgr-stats">
-          <div class="mgr-stat"><div class="mgr-stat-ico grad-emerald"><i class="fa-solid fa-car-side"></i></div>
-            <div><div class="mgr-stat-num">${H.num(vehicles.length)}</div><div class="mgr-stat-lb">รถทั้งหมด</div></div></div>
+          <div class="mgr-stat"><div class="mgr-stat-ico grad-emerald"><i class="fa-solid fa-${isDriverMode ? 'id-card' : 'car-side'}"></i></div>
+            <div><div class="mgr-stat-num">${H.num(items.length)}</div><div class="mgr-stat-lb">${colLabel}ทั้งหมด</div></div></div>
           <div class="mgr-stat"><div class="mgr-stat-ico grad-sky"><i class="fa-solid fa-circle-check"></i></div>
-            <div><div class="mgr-stat-num">${H.num(freeVehicles)}</div><div class="mgr-stat-lb">ไม่มีจองในช่วงนี้</div></div></div>
+            <div><div class="mgr-stat-num">${H.num(freeItems)}</div><div class="mgr-stat-lb">ไม่มีจองในช่วงนี้</div></div></div>
           <div class="mgr-stat"><div class="mgr-stat-ico grad-violet"><i class="fa-solid fa-clock"></i></div>
-            <div><div class="mgr-stat-num">${H.num(busyVehicles)}</div><div class="mgr-stat-lb">มีการจองอยู่</div></div></div>
+            <div><div class="mgr-stat-num">${H.num(busyItems)}</div><div class="mgr-stat-lb">มีการจองอยู่</div></div></div>
           <div class="mgr-stat"><div class="mgr-stat-ico grad-amber"><i class="fa-regular fa-calendar-check"></i></div>
             <div><div class="mgr-stat-num">${H.num(totalBookings)}</div><div class="mgr-stat-lb">รายการจองรวม</div></div></div>
         </section>
 
         <section class="sch-toolbar">
+          <!-- Mode toggle -->
+          <div class="sch-mode-tabs">
+            <button class="sch-mode-tab ${!isDriverMode ? 'active' : ''}" data-sch-mode="vehicle">
+              <i class="fa-solid fa-car-side"></i><span>ตารางรถ</span>
+            </button>
+            <button class="sch-mode-tab ${isDriverMode ? 'active' : ''}" data-sch-mode="driver">
+              <i class="fa-solid fa-id-card"></i><span>ตารางคนขับ</span>
+            </button>
+          </div>
           <div class="sch-range">
             <label class="rpt-filter-field">
               <span><i class="fa-regular fa-calendar"></i> จากวันที่</span>
@@ -2012,7 +2055,7 @@
         <section class="card sch-card">
           <div class="sch-grid">
             <div class="sch-grid-head">
-              <div class="sch-vinfo-head"><i class="fa-solid fa-car-side"></i> รถ</div>
+              <div class="sch-vinfo-head"><i class="fa-solid fa-${colIcon}"></i> ${colLabel}</div>
               <div class="sch-track-head">${dayHeader}</div>
             </div>
             <div class="sch-grid-body">${rows}</div>
@@ -2020,10 +2063,12 @@
         </section>
 
         <section class="sch-legend">
-          <span class="sch-legend-title">สถานะการจอง:</span>
-          <span class="sch-legend-item"><span class="sch-bar sch-bar-approved_l1" style="position:static;width:20px;height:14px"></span>รอจัดสรร</span>
-          <span class="sch-legend-item"><span class="sch-bar sch-bar-approved" style="position:static;width:20px;height:14px"></span>อนุมัติ</span>
-          <span class="sch-legend-item"><span class="sch-bar sch-bar-in_progress" style="position:static;width:20px;height:14px"></span>กำลังเดินทาง</span>
+          <span class="sch-legend-title">สถานะ:</span>
+          <span class="sch-legend-item"><span class="sch-bar sch-bar-pending"      style="position:static;width:20px;height:14px"></span>รอ L1</span>
+          <span class="sch-legend-item"><span class="sch-bar sch-bar-approved_l1"  style="position:static;width:20px;height:14px"></span>รอ L2</span>
+          <span class="sch-legend-item"><span class="sch-bar sch-bar-approved_l2"  style="position:static;width:20px;height:14px"></span>รอ L3</span>
+          <span class="sch-legend-item"><span class="sch-bar sch-bar-approved"     style="position:static;width:20px;height:14px"></span>อนุมัติ</span>
+          <span class="sch-legend-item"><span class="sch-bar sch-bar-in_progress"  style="position:static;width:20px;height:14px"></span>กำลังเดินทาง</span>
         </section>
       </div>
     `;
@@ -2039,6 +2084,8 @@
     const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
     const lastOfMonth  = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10);
     const selected = (d && d.type) || 'usageSummary';
+    const role = (d && d.role) || '';
+    const isExec = ['super_admin','div_admin','director','deputy','mayor'].indexOf(role) >= 0;
 
     const types = [
       { key: 'usageSummary', label: 'สรุปการใช้รถ',     sub: 'ภาพรวมการใช้งาน · เมตริกหลัก',       icon: 'fa-chart-pie',    grad: 'grad-emerald' },
@@ -2056,27 +2103,43 @@
         <div class="rpt-type-check"><i class="fa-solid fa-circle-check"></i></div>
       </button>`).join('');
 
-    return `
-      <div class="rpt-page">
-        <!-- Hero -->
-        <section class="rpt-hero">
-          <div class="rpt-hero-decor"></div>
-          <div class="rpt-hero-inner">
-            <div class="rpt-hero-title">
-              <div class="rpt-hero-icon"><i class="fa-solid fa-chart-line"></i></div>
-              <div>
-                <h1 class="rpt-hero-h">รายงานและสถิติ</h1>
-                <div class="rpt-hero-sub">วิเคราะห์การใช้ยานพาหนะ · สรุปข้อมูลเชิงลึก · ส่งออก CSV / พิมพ์</div>
-              </div>
+    // กลุ่ม "พิมพ์เอกสารราชการรายเดือน" — เปิดให้ทุก role ที่เข้าหน้านี้ได้ใช้
+    const printCards = `
+      <section class="rpt-section">
+        <div class="rpt-section-head">
+          <h2 class="rpt-section-title"><i class="fa-solid fa-print"></i> พิมพ์เอกสารราชการรายเดือน</h2>
+          <div class="rpt-section-sub">เลือกรถ + เดือน เพื่อพิมพ์เอกสารทั้งเดือนทีเดียว · เห็นเฉพาะข้อมูลกองของท่าน</div>
+        </div>
+        <div class="rpt-type-grid">
+          <button type="button" class="rpt-type-card" data-rpt-print="form3">
+            <div class="rpt-type-ico grad-violet"><i class="fa-solid fa-file-invoice"></i></div>
+            <div class="rpt-type-body">
+              <div class="rpt-type-label">แบบ ๓ รายเดือน</div>
+              <div class="rpt-type-sub">ใบขออนุญาตใช้รถส่วนกลาง · ทุกคำขอของรถคันนั้นในเดือนที่เลือก</div>
             </div>
-          </div>
-        </section>
+            <div class="rpt-type-check"><i class="fa-solid fa-arrow-right"></i></div>
+          </button>
+          <button type="button" class="rpt-type-card" data-rpt-print="form4">
+            <div class="rpt-type-ico grad-amber"><i class="fa-solid fa-file-lines"></i></div>
+            <div class="rpt-type-body">
+              <div class="rpt-type-label">แบบ ๔ รายเดือน</div>
+              <div class="rpt-type-sub">บันทึกการใช้ยานพาหนะส่วนกลาง · 1 หน้าสรุปทั้งเดือน</div>
+            </div>
+            <div class="rpt-type-check"><i class="fa-solid fa-arrow-right"></i></div>
+          </button>
+        </div>
+      </section>`;
 
-        <!-- Type cards -->
-        <section class="rpt-type-grid">${typeCards}</section>
+    // กลุ่ม "รายงานเชิงสถิติ" — เฉพาะ EXEC (super_admin / div_admin / director / deputy / mayor)
+    const statsSection = isExec ? `
+      <section class="rpt-section">
+        <div class="rpt-section-head">
+          <h2 class="rpt-section-title"><i class="fa-solid fa-chart-line"></i> รายงานเชิงสถิติ</h2>
+          <div class="rpt-section-sub">วิเคราะห์การใช้ยานพาหนะ · สรุปข้อมูลเชิงลึก · ส่งออก CSV</div>
+        </div>
+        <div class="rpt-type-grid">${typeCards}</div>
         <input type="hidden" id="reportType" value="${selected}">
 
-        <!-- Filter bar -->
         <section class="rpt-filter">
           <div class="rpt-filter-grid">
             <label class="rpt-filter-field">
@@ -2108,8 +2171,27 @@
           </div>
         </section>
 
-        <!-- Output -->
         <div id="reportOutput" class="rpt-output"></div>
+      </section>` : '';
+
+    return `
+      <div class="rpt-page">
+        <!-- Hero -->
+        <section class="rpt-hero">
+          <div class="rpt-hero-decor"></div>
+          <div class="rpt-hero-inner">
+            <div class="rpt-hero-title">
+              <div class="rpt-hero-icon"><i class="fa-solid fa-chart-line"></i></div>
+              <div>
+                <h1 class="rpt-hero-h">รายงานและเอกสาร</h1>
+                <div class="rpt-hero-sub">พิมพ์เอกสารราชการรายเดือน${isExec ? ' · วิเคราะห์การใช้ยานพาหนะ · ส่งออก CSV' : ''}</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        ${printCards}
+        ${statsSection}
       </div>
     `;
   };
@@ -2252,6 +2334,39 @@
   };
 
   /* ========================================================================
+   *  SIGNATURE PAD — เซ็นด้วยนิ้ว/เมาส์ หรือ upload รูป
+   * ====================================================================== */
+  Views.signatureForm = function (opts) {
+    opts = opts || {};
+    const cur = opts.current || '';
+    const preview = cur
+      ? `<img id="sigCurrent" src="${H.esc(cur)}" alt="ลายเซ็นปัจจุบัน" style="max-height:80px;max-width:240px;object-fit:contain;border:1px solid #cbd5e1;background:#fff;padding:4px;border-radius:6px;">`
+      : `<span id="sigCurrent" style="color:#94a3b8;font-size:13px;">ยังไม่มีลายเซ็น</span>`;
+    return `
+      <div class="signature-modal" style="display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-weight:600;font-size:14px;">ลายเซ็นปัจจุบัน:</span>
+          ${preview}
+        </div>
+        <div style="font-size:13px;color:#475569;line-height:1.5;">
+          วาดลายเซ็นในกรอบด้านล่าง (ใช้นิ้วบนมือถือ/แท็บเล็ต หรือเมาส์บนคอมพิวเตอร์)
+          หรือเลือก "อัปโหลดรูป" หากมีไฟล์รูปลายเซ็นเตรียมไว้แล้ว — แนะนำพื้นหลังโปร่งใสหรือสีขาว
+        </div>
+        <canvas id="sigCanvas" width="600" height="200"
+          style="border:2px dashed #94a3b8;background:#fff;width:100%;max-width:100%;height:200px;touch-action:none;border-radius:6px;cursor:crosshair;"></canvas>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-ghost" id="sigClearBtn"><i class="fa-solid fa-eraser"></i> ล้าง</button>
+          <label class="btn btn-ghost" style="cursor:pointer;margin:0;">
+            <i class="fa-solid fa-upload"></i> อัปโหลดรูป
+            <input type="file" id="sigUpload" accept="image/png,image/jpeg" style="display:none;">
+          </label>
+          ${cur ? '<button type="button" class="btn btn-ghost" id="sigRemoveBtn" style="color:#dc2626;"><i class="fa-solid fa-trash"></i> ลบลายเซ็นที่บันทึกไว้</button>' : ''}
+        </div>
+      </div>
+    `;
+  };
+
+  /* ========================================================================
    *  REJECT REASON FORM
    * ====================================================================== */
   Views.rejectForm = function (d) {
@@ -2346,6 +2461,123 @@
     `;
   };
 
-  global.Views = Views;
-})(window);
+  Views.settings = function (d) {
+    const s = d.settings || {};
+    const H = Views._helpers || window.H || { esc: function(v){return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');} };
+    const esc = (H && H.esc) ? H.esc.bind(H) : function(v){return String(v||'');};
+    const emailEnabled = s['notify.enable_email'] === 'true';
+    return `
+      <div class="card" style="max-width:700px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+          <h2 style="margin:0;">ตั้งค่าระบบ</h2>
+          <div style="display:flex;gap:8px;">
+            <button id="btnTestEmail" class="btn btn-ghost" type="button">
+              <i class="fa-solid fa-envelope"></i> ทดสอบอีเมล
+            </button>
+            <button id="btnSaveSettings" class="btn btn-primary" type="button">
+              <i class="fa-solid fa-floppy-disk"></i> บันทึก
+            </button>
+          </div>
+        </div>
+        <form id="settingsForm" autocomplete="off">
+          <fieldset style="border:none;padding:0;margin:0 0 24px;">
+            <legend style="font-weight:700;font-size:15px;color:#1e293b;margin-bottom:12px;border-bottom:2px solid #e2e8f0;padding-bottom:6px;width:100%;">ข้อมูลองค์กร</legend>
+            <label class="field">
+              <span class="field-label">ชื่อองค์กร</span>
+              <input type="text" name="org_name" value="${esc(s['system.org_name'])}" maxlength="150">
+            </label>
+            <label class="field">
+              <span class="field-label">ชื่อระบบ</span>
+              <input type="text" name="org_system" value="${esc(s['system.system_name'])}" maxlength="100">
+            </label>
+          </fieldset>
+
+          <fieldset style="border:none;padding:0;margin:0 0 24px;">
+            <legend style="font-weight:700;font-size:15px;color:#1e293b;margin-bottom:12px;border-bottom:2px solid #e2e8f0;padding-bottom:6px;width:100%;">การแจ้งเตือนอีเมล</legend>
+            <label class="field field-inline" style="margin-bottom:16px;">
+              <input type="checkbox" id="settingEmailEnable" name="enable_email" ${emailEnabled ? 'checked' : ''}>
+              <span class="field-label">เปิดใช้งานการแจ้งเตือนทางอีเมล</span>
+            </label>
+            <div id="smtpBlock" style="${emailEnabled ? '' : 'display:none'}">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <label class="field">
+                  <span class="field-label">SMTP Host</span>
+                  <input type="text" name="smtp_host" value="${esc(s['smtp.host'])}" placeholder="smtp.gmail.com">
+                </label>
+                <label class="field">
+                  <span class="field-label">SMTP Port</span>
+                  <input type="number" name="smtp_port" value="${esc(s['smtp.port'])}" placeholder="587" min="1" max="65535">
+                </label>
+                <label class="field">
+                  <span class="field-label">ชื่อผู้ใช้ (Username)</span>
+                  <input type="text" name="smtp_user" value="${esc(s['smtp.user'])}" placeholder="user@example.com" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span class="field-label">รหัสผ่าน (Password / App Password)</span>
+                  <input type="password" name="smtp_pass" value="${esc(s['smtp.pass'])}" autocomplete="new-password">
+                </label>
+              </div>
+              <label class="field">
+                <span class="field-label">ที่อยู่ผู้ส่ง (From)</span>
+                <input type="email" name="smtp_from" value="${esc(s['smtp.from'])}" placeholder="noreply@bangkaew.go.th">
+              </label>
+              <p class="muted" style="font-size:12px;margin:4px 0 0;">
+                หมายเหตุ: Gmail ต้องใช้ App Password และเปิด 2FA ก่อน
+              </p>
+              <label class="field" style="margin-top:12px;">
+                <span class="field-label">อีเมลทดสอบ (notify.test_email)</span>
+                <input type="email" name="smtp_test_email" value="${esc(s['notify.test_email'])}" placeholder="admin@bangkaew.go.th">
+                <span class="field-hint">ใช้กับปุ่ม "ทดสอบอีเมล"</span>
+              </label>
+            </div>
+          </fieldset>
+        </form>
+      </div>`;
+  };
+
+  /* =========================================================================
+   *  PRINT HELPERS
+   * ======================================================================= */
+
+  // แปลงวันที่เป็นรูปแบบราชการไทย เช่น "28 เมษายน 2569"
+  Views._thDate = function(v) {
+    if (!v) return '-';
+    var MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                  'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    var d;
+    if (v instanceof Date) { d = v; }
+    else {
+      var s = String(v).trim();
+      // support "dd/mm/yyyy", "yyyy-mm-dd", ISO
+      if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) {
+        var p = s.split('/'); d = new Date(p[2], p[1]-1, p[0]);
+      } else { d = new Date(s); }
+    }
+    if (isNaN(d.getTime())) return String(v);
+    return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + (d.getFullYear() + 543);
+  };
+
+  Views._esc = function(v) { return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  Views._dash = function(v) { var s = String(v||'').trim(); return s || '-'; };
+
+
+  /* mark Views as fully loaded */
+  window.__VIEWS_BOOT__ = window.__VIEWS_BOOT__ || { errors: [] };
+  window.__VIEWS_BOOT__.loaded = true;
+  window.__VIEWS_BOOT__.viewKeys = Object.keys(window.Views);
+} catch (e) {
+  /* ถ้า script ด้านบน throw error → window.Views ยังคงอยู่ (อาจจะ partial)
+     บันทึก error ไว้ดูภายหลัง และเปลี่ยน document.title ให้เห็นทันที */
+  window.__VIEWS_BOOT__ = window.__VIEWS_BOOT__ || { errors: [] };
+  window.__VIEWS_BOOT__.errors.push({
+    message: (e && e.message) || String(e),
+    stack: (e && e.stack) || ''
+  });
+  try {
+    document.title = '[Views ERR] ' + ((e && e.message) || e);
+  } catch(_) {}
+  if (window.console && console.error) {
+    console.error('[Views.html] fatal error during define:', e);
+  }
+}
 </script>

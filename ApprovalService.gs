@@ -66,6 +66,7 @@ function Approval_approve(session, payload) {
     DB_update(SHEETS.REQUESTS, r.id, { status: REQUEST_STATUS.APPROVED_L1, current_level: 2, updated_at: Utils_now() });
     _logApproval(r.id, session, APPROVAL_ACTIONS.APPROVE, 1, payload.comment);
     Utils_audit(session.userId, session.username, 'approval.approve_l1', 'request', r.id, '');
+    try { Email_notifyApprovalL1(DB_findById(SHEETS.REQUESTS, r.id)); } catch(e) { console.error(e); }
     return ok(true);
   }
 
@@ -76,6 +77,7 @@ function Approval_approve(session, payload) {
     DB_update(SHEETS.REQUESTS, r.id, { status: REQUEST_STATUS.APPROVED_L2, current_level: 3, updated_at: Utils_now() });
     _logApproval(r.id, session, APPROVAL_ACTIONS.APPROVE, 2, payload.comment);
     Utils_audit(session.userId, session.username, 'approval.approve_l2', 'request', r.id, '');
+    try { Email_notifyApprovalL2(DB_findById(SHEETS.REQUESTS, r.id)); } catch(e) { console.error(e); }
     return ok(true);
   }
 
@@ -85,8 +87,8 @@ function Approval_approve(session, payload) {
     }
     DB_update(SHEETS.REQUESTS, r.id, { status: REQUEST_STATUS.APPROVED, current_level: 4, updated_at: Utils_now() });
     _logApproval(r.id, session, APPROVAL_ACTIONS.APPROVE, 3, payload.comment);
-    try { Email_notifyApproved(r); } catch(e) { console.error(e); }
     Utils_audit(session.userId, session.username, 'approval.approve_l3', 'request', r.id, '');
+    try { Email_notifyApproved(DB_findById(SHEETS.REQUESTS, r.id)); } catch(e) { console.error(e); }
     return ok(true);
   }
 
@@ -114,7 +116,7 @@ function Approval_reject(session, payload) {
 
   DB_update(SHEETS.REQUESTS, r.id, { status: REQUEST_STATUS.REJECTED, reject_reason: payload.comment, updated_at: Utils_now() });
   _logApproval(r.id, session, APPROVAL_ACTIONS.REJECT, levelMap[r.status] || 1, payload.comment);
-  try { Email_notifyRejected(r, payload.comment); } catch(e) { console.error(e); }
+  try { Email_notifyRejected(r, payload.comment, levelMap[r.status] || 1); } catch(e) { console.error(e); }
   Utils_audit(session.userId, session.username, 'approval.reject', 'request', r.id, payload.comment);
   return ok(true);
 }

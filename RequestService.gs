@@ -13,12 +13,19 @@
  */
 function Request_list(session, payload) {
   payload = payload || {};
-  const scope = payload.scope || (Auth_isAdmin(session) || Auth_isManager(session) ? 'all' : 'mine');
+  // ผู้ที่เห็นทั้งหมดได้: SuperAdmin/DivAdmin/Director/Deputy/Mayor (เทียบเท่า server.js)
+  const seesAll = Auth_isAdmin(session) || Auth_isManager(session)
+               || Auth_isDirector(session) || Auth_isDeputy(session) || Auth_isMayor(session);
+  const scope = payload.scope || (seesAll ? 'all' : 'mine');
 
   let rows = DB_findAll(SHEETS.REQUESTS);
 
   if (scope === 'mine') {
     rows = rows.filter(r => r.requester_id === session.userId);
+  }
+  // Division scoping: ถ้าไม่ใช่ canSeeAllDivisions (ปลัด/นายก/SuperAdmin) ให้กรองเฉพาะกองตัวเอง
+  if (!Auth_canSeeAllDivisions(session) && session.division_id) {
+    rows = rows.filter(r => r.division_id === session.division_id || r.requester_id === session.userId);
   }
 
   if (payload.status) {
@@ -38,11 +45,68 @@ function Request_list(session, payload) {
   if (payload.departmentFilter) {
     rows = rows.filter(r => r.department === payload.departmentFilter);
   }
+  if (payload.divisionFilter) {
+    rows = rows.filter(r => r.division_id === payload.divisionFilter);
+  }
+  // Filter เพิ่มเติมสำหรับการพิมพ์แบบ 4
+  if (payload.vehicleId) rows = rows.filter(r => r.vehicle_id === payload.vehicleId);
+  if (payload.driverId)  rows = rows.filter(r => r.driver_id  === payload.driverId);
+  if (payload.year && payload.month) {
+    const y = Number(payload.year);
+    const m = Number(payload.month);
+    rows = rows.filter(function(r) {
+      if (!r.depart_date) return false;
+      const d = new Date(r.depart_date);
+      return d.getFullYear() === y && (d.getMonth() + 1) === m;
+    });
+  }
 
   // sort: ใหม่สุดก่อน
   rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 
   return ok(rows);
+}
+
+/**
+ * Batch ดึงรายละเอียดคำขอสำหรับการพิมพ์แบบ ๓ รายเดือน
+ * - input: { vehicleId, year, month }
+ * - enforce ขอบเขตกอง (เหมือน Request_list)
+ * - return: { items: [{ request, history, trip }, ...] }
+ *   ฝั่ง dispatcher จะส่งผ่าน Adapter_requestDetailOut เพื่อเติม vehicle/driver/approvers
+ *
+ * เปิดให้ทุก role ที่ login ได้ใช้ — server enforce กองอัตโนมัติให้
+ * ผู้ที่ไม่ใช่ canSeeAllDivisions
+ */
+function Request_printBatch(session, payload) {
+  payload = payload || {};
+  if (!payload.vehicleId) return err('invalid_input', 'กรุณาเลือกหมายเลขทะเบียนรถ');
+  if (!payload.year || !payload.month) return err('invalid_input', 'กรุณาระบุเดือน/ปี');
+  let rows = DB_findAll(SHEETS.REQUESTS);
+  // ขอบเขตกอง: ไม่ใช่ canSeeAllDivisions → กรองเฉพาะกองตัวเอง (+ ของตัวเอง)
+  if (!Auth_canSeeAllDivisions(session) && session.division_id) {
+    rows = rows.filter(r => r.division_id === session.division_id || r.requester_id === session.userId);
+  }
+  rows = rows.filter(r => r.vehicle_id === payload.vehicleId);
+  const y = Number(payload.year), m = Number(payload.month);
+  rows = rows.filter(function(r) {
+    if (!r.depart_date) return false;
+    const d = new Date(r.depart_date);
+    return d.getFullYear() === y && (d.getMonth() + 1) === m;
+  });
+  // เรียงจากวันที่น้อยไปมาก (parse เป็น Date กัน format ไม่นิ่ง)
+  rows.sort(function(a, b) {
+    const ta = new Date(a.depart_date).getTime() || 0;
+    const tb = new Date(b.depart_date).getTime() || 0;
+    if (ta !== tb) return ta - tb;
+    return String(a.depart_time || '').localeCompare(String(b.depart_time || ''));
+  });
+  const items = rows.map(function(r) {
+    const history = DB_findAll(SHEETS.APPROVAL_LOGS, { where: { request_id: r.id } });
+    history.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    const trip = DB_findOne(SHEETS.TRIP_LOGS, { request_id: r.id });
+    return { request: r, history: history, trip: trip };
+  });
+  return ok({ items: items });
 }
 
 function Request_get(session, id) {

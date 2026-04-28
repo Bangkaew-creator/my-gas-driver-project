@@ -92,17 +92,21 @@ function Adapter_vehicleIn(payload) {
 function Adapter_driverOut(d) {
   if (!d) return d;
   let username = '';
+  let userId = '';
+  let signature = '';
   if (d.email) {
     try {
       const u = DB_findOne(SHEETS.USERS, { email: d.email });
-      if (u) username = u.username;
+      if (u) { username = u.username; userId = u.id; signature = u.signature || ''; }
     } catch (e) { /* ignore */ }
   }
   return Object.assign({}, d, {
     full_name: d.fullname,
     license_no: d.license_number,
     user_username: username,
-    user_id: '', // ผูกผ่าน email (ดู Adapter_driverIn)
+    user_id: userId,        // resolve จาก email match
+    user_email: d.email || '',
+    signature: signature,
     remark: d.notes || ''
   });
 }
@@ -149,8 +153,18 @@ function Adapter_historyOut(h) {
     trip_start: 'เริ่มเดินทาง',
     trip_complete: 'สิ้นสุดการเดินทาง'
   };
+  let actorSig = '';
+  let actorPos = '';
+  if (h.approver_id) {
+    try {
+      const u = DB_findById(SHEETS.USERS, h.approver_id);
+      if (u) { actorSig = u.signature || ''; actorPos = u.position || ''; }
+    } catch (e) { /* ignore */ }
+  }
   return Object.assign({}, h, {
     actor_name: h.approver_name || '',
+    actor_signature: actorSig,
+    actor_position: actorPos,
     action_label: labels[h.action] || h.action,
     remark: h.comment || ''
   });
@@ -300,7 +314,33 @@ function Adapter_requestDetailOut(data) {
     if (dr) driver = Adapter_driverOut(dr);
   }
 
-  return { request: req, history: history, trip: trip, vehicle: vehicle, driver: driver };
+  // เสริม position จากตาราง users กรณีที่ request เก่าไม่มีข้อมูล
+  if (req && !req.position && req.requester_id) {
+    const u = DB_findById(SHEETS.USERS, req.requester_id);
+    if (u && u.position) req.position = u.position;
+  }
+
+  // ดึงข้อมูลผู้อนุมัติทุกระดับจาก Users (column position) เพื่อให้แสดงตั้งแต่ส่งคำขอ
+  const allUsers = DB_findAll(SHEETS.USERS) || [];
+  const divId = req && req.division_id;
+  const l1Arr = allUsers.filter(function(u) { return u.role === ROLES.DIRECTOR && u.status === 'active' && (!divId || u.division_id === divId); });
+  const l1User = l1Arr.length ? l1Arr[0] : allUsers.filter(function(u) { return u.role === ROLES.DIRECTOR && u.status === 'active'; })[0];
+  const l2User = allUsers.filter(function(u) { return u.role === ROLES.DEPUTY && u.status === 'active'; })[0];
+  const l3User = allUsers.filter(function(u) { return u.role === ROLES.MAYOR && u.status === 'active'; })[0];
+  const mayorTitle = (l3User && l3User.position) ? l3User.position : 'นายกเทศมนตรี';
+  const approvers = {
+    l1: { name: l1User ? (l1User.fullname || '') : '', pos: l1User ? (l1User.position || '') : '', signature: l1User ? (l1User.signature || '') : '' },
+    l2: { name: l2User ? (l2User.fullname || '') : '', pos: l2User ? (l2User.position || '') : '', signature: l2User ? (l2User.signature || '') : '' },
+    l3: { name: l3User ? (l3User.fullname || '') : '', pos: l3User ? (l3User.position || '') : '', signature: l3User ? (l3User.signature || '') : '' }
+  };
+
+  // เติม signature ของผู้ขอ
+  if (req && req.requester_id) {
+    const ru = DB_findById(SHEETS.USERS, req.requester_id);
+    if (ru) req.requester_signature = ru.signature || '';
+  }
+
+  return { request: req, history: history, trip: trip, vehicle: vehicle, driver: driver, mayorTitle: mayorTitle, approvers: approvers };
 }
 
 /* ---------------- Approval pending enrichment ---------------- */
