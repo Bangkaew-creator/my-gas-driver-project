@@ -1,45 +1,89 @@
 <script>
+console.log("🔥 [ViewsPrint] เริ่มต้นโหลดไฟล์ (Bulletproof Safe Mode)...");
+
 /* ============================================================================
- *  ViewsPrint.html — แยกออกจาก Views.html เพราะรวมแล้วใหญ่เกิน
- *  ใส่ Views.printForm3 และ Views.printForm4 ลงใน window.Views ที่มีอยู่แล้ว
+ * ViewsPrint.html — ฉบับแก้บั๊ก Sandbox (ลบเครื่องหมาย ? ออกจาก Logic ทั้งหมด 100%)
  * ============================================================================ */
 window.Views = window.Views || {};
+
 try {
   var Views = window.Views;
   var H = window.H || {};
 
-  // ===== shared helpers (ใช้ได้ทั้ง printForm3 และ printForm4) =====
-  // แปลงเวลาให้เป็น HH:MM โดย "ไม่ shift timezone"
-  // - Date object: ใช้ getHours() (local เครื่อง — สำหรับกรณี GAS ส่ง Date มา)
-  // - String มี T (ISO): ดึง HH:MM ออกตรงๆ จาก string (ไม่ผ่าน Date) เพื่อรักษาเลขที่ผู้ใช้คีย์
-  // - String "HH:MM" / "HH:MM:SS": normalize เป็น HH:MM
-  // - อื่นๆ / parse ไม่ได้: คืน '' (ป้องกัน XSS — ไม่หลุด raw input เข้า HTML)
+  // ==========================================
+  // Fallback Helpers (ใช้ if/else แทน ?:)
+  // ==========================================
+  var E = function(v) { 
+    if (H && H.esc) {
+      return H.esc(v);
+    }
+    if (!v) {
+      return '';
+    }
+    return String(v).replace(/[&<>"']/g, function(c){
+      if (c === '&') return '&amp;';
+      if (c === '<') return '&lt;';
+      if (c === '>') return '&gt;';
+      if (c === '"') return '&quot;';
+      if (c === "'") return '&#39;';
+      return c;
+    }); 
+  };
+
+  var D = function(v) { 
+    if (Views._thDate) {
+      return Views._thDate(v);
+    }
+    if (!v) {
+      return '';
+    }
+    return v; 
+  }; 
+
+  var dash = function(v) { 
+    if (Views._dash) {
+      return Views._dash(v);
+    }
+    if (!v) {
+      return '-';
+    }
+    var s = String(v).trim();
+    if (!s) {
+      return '-';
+    }
+    return s; 
+  };
+
   function _fmtTime(v) {
     if (v === undefined || v === null || v === '') return '';
     if (v instanceof Date) {
       if (isNaN(v.getTime())) return '';
-      return ('0'+v.getHours()).slice(-2) + ':' + ('0'+v.getMinutes()).slice(-2);
+      var hDate = v.getHours().toString();
+      if (hDate.length < 2) hDate = '0' + hDate;
+      var mDate = v.getMinutes().toString();
+      if (mDate.length < 2) mDate = '0' + mDate;
+      return hDate + ':' + mDate;
     }
     var s = String(v).trim();
     if (!s) return '';
-    // ISO datetime "...T14:30..." — ดึงเวลาจาก text ตรงๆ ไม่ทำ timezone conversion
     var iso = s.match(/T(\d{2}):(\d{2})/);
-    if (iso) return iso[1] + ':' + iso[2];
-    // "HH:MM" หรือ "HH:MM:SS"
+    if (iso) {
+      return iso[1] + ':' + iso[2];
+    }
     var m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
-    if (m) return ('0'+m[1]).slice(-2) + ':' + m[2];
-    // ไม่ใช่รูปแบบเวลาที่รู้จัก — คืนค่าว่างเพื่อความปลอดภัย
+    if (m) {
+      var hStr = m[1];
+      if (hStr.length < 2) hStr = '0' + hStr;
+      return hStr + ':' + m[2];
+    }
     return '';
   }
 
-  // แปลงตัวเลขอารบิคเป็นเลขไทย (รับเฉพาะ string/number — ปลอดภัยจาก HTML)
   function _toThaiNum(v) {
     if (v === undefined || v === null || v === '') return '';
-    var s = String(v);
-    return s.replace(/[0-9]/g, function(c) { return '๐๑๒๓๔๕๖๗๘๙'[+c]; });
+    return String(v).replace(/[0-9]/g, function(c) { return '๐๑๒๓๔๕๖๗๘๙'[+c]; });
   }
 
-  // วันที่ไทยแบบยาว — "๕ พฤษภาคม ๒๕๖๙"
   var _MONTHS_TH_FULL = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
                          'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
   function _thDateLong(iso) {
@@ -49,10 +93,9 @@ try {
     return _toThaiNum(dt.getDate()) + ' ' + _MONTHS_TH_FULL[dt.getMonth()] + ' ' + _toThaiNum(dt.getFullYear()+543);
   }
 
-  // ===============================================================
-  //  แบบ 3 — ใบขออนุญาตใช้รถส่วนกลาง  (ตาม template ต้นฉบับ)
-  // ===============================================================
-  // ===== shared CSS for แบบ ๓ — ใช้ทั้งโหมดใบเดียวและ batch =====
+  // ==========================================
+  // 1. โครงสร้างแบบ 3
+  // ==========================================
   var _FORM3_CSS = ''
     + '* { box-sizing: border-box; margin: 0; padding: 0; }'
     + 'body { font-family: "Sarabun","TH Sarabun New",sans-serif; font-size: 12pt; line-height: 1.65; color: #000; background: #e8e8e8; }'
@@ -89,44 +132,33 @@ try {
     + '  @page { size: A4 portrait; margin: 0; }'
     + '}';
 
-  /**
-   * Render เฉพาะส่วน <div class="page">...</div> ของแบบ ๓ — 1 ใบ
-   * ใช้ทั้งโหมดใบเดียว (printForm3) และ batch รายเดือน (printForm3Batch)
-   * คืน { pageHTML, title }
-   */
   Views._form3PageHTML = function(data, cfg) {
     var r  = data.request || {};
     var h  = data.history || [];
     var t  = data.trip    || {};
     var v  = data.vehicle || {};
     var dr = data.driver  || {};
-    var E    = Views._esc;
-    var D    = Views._thDate;
-    var dash = Views._dash;
-
-    // =============== helpers ===============
+    
     var _ap = data.approvers || {};
     function approverAt(lvl) {
       var pre = _ap['l' + lvl] || {};
-      // ค้นหาใน history ก่อน (ถ้ามีการอนุมัติแล้ว)
       for (var i = 0; i < h.length; i++) {
         if (h[i].level == lvl && (h[i].action === 'approve' || h[i].action_label === 'อนุมัติ')) {
-          return {
-            name: h[i].actor_name || pre.name || '',
-            pos:  pre.pos || h[i].actor_position || '',   // ใช้จาก Users ก่อน
-            date: D(h[i].created_at),
-            sig:  h[i].actor_signature || pre.signature || ''
-          };
+          var foundName = h[i].actor_name || pre.name || '';
+          var foundPos = pre.pos || h[i].actor_position || '';
+          var foundSig = h[i].actor_signature || pre.signature || '';
+          return { name: foundName, pos: foundPos, date: h[i].created_at, sig: foundSig };
         }
       }
-      // ยังไม่มีการอนุมัติ — แสดงชื่อ+ตำแหน่งจาก Users ไว้ล่วงหน้า ไม่แสดงวันที่/ลายเซ็น
-      return { name: pre.name || '', pos: pre.pos || '', date: '', sig: '' };
+      var pName = pre.name || '';
+      var pPos = pre.pos || '';
+      return { name: pName, pos: pPos, date: '', sig: '' };
     }
-    var a1 = approverAt(1); // ผู้อำนวยการกอง
-    var a2 = approverAt(2); // ปลัดเทศบาล
-    var a3 = approverAt(3); // นายกเทศมนตรี
+    
+    var a1 = approverAt(1); 
+    var a2 = approverAt(2); 
+    var a3 = approverAt(3); 
 
-    // แยก วัน/เดือน/ปีพุทธ จาก ISO date string
     var MONTHS_TH = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
                      'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
     function dp(iso) {
@@ -134,12 +166,6 @@ try {
       var dt = new Date(iso);
       if (isNaN(dt.getTime())) return {d:'',m:'',y:''};
       return { d: dt.getDate(), m: MONTHS_TH[dt.getMonth()], y: dt.getFullYear()+543 };
-    }
-
-    // แปลงตัวเลขอารบิคเป็นตัวเลขไทย
-    function toThaiNum(v) {
-      var s = String(v === undefined || v === null ? '' : v);
-      return s.replace(/[0-9]/g, function(c) { return '๐๑๒๓๔๕๖๗๘๙'[+c]; });
     }
 
     var fmtTime = _fmtTime;
@@ -157,33 +183,56 @@ try {
     var reqDP      = dp(r.created_at || r.depart_date);
     var goDP       = dp(r.depart_date);
     var bkDP       = dp(r.return_date);
-    var vehDetail  = [plate, brand, model].filter(Boolean).join(' ');
+    
+    var vehDetailArr = [];
+    if (plate) vehDetailArr.push(plate);
+    if (brand) vehDetailArr.push(brand);
+    if (model) vehDetailArr.push(model);
+    var vehDetail = vehDetailArr.join(' ');
 
-    // ช่องกรอก — เส้นประ inline
     function ul(val, w, center) {
-      var v2 = (val !== undefined && val !== null && String(val) !== '-') ? String(val) : '';
-      return '<span style="display:inline-block;border-bottom:1px dashed #000;min-width:'+(w||'80px')+';padding:0 4px;'+(center?'text-align:center;':'')+'vertical-align:bottom;">' + (v2 || '&nbsp;') + '</span>';
+      var v2 = '';
+      if (val !== undefined && val !== null && String(val) !== '-') {
+        v2 = String(val);
+      }
+      var align = '';
+      if (center) {
+        align = 'text-align:center;';
+      }
+      var width = w || '80px';
+      var content = v2 || '&nbsp;';
+      return '<span style="display:inline-block;border-bottom:1px dashed #000;min-width:' + width + ';padding:0 4px;' + align + 'vertical-align:bottom;">' + content + '</span>';
     }
 
-    // ช่องใต้ลายเซ็น — เส้นประยาว
-    function dots(w) { return '<span style="display:inline-block;border-bottom:1px dashed #000;min-width:'+(w||'160px')+';"></span>'; }
+    function dots(w) { 
+      var width = w || '160px';
+      return '<span style="display:inline-block;border-bottom:1px dashed #000;min-width:' + width + ';"></span>'; 
+    }
 
-    // helper: sig block HTML — sigUrl เป็น data URL/รูปลายเซ็น (optional)
     function sigBlock(name, posLabel, dateStr, sigUrl) {
-      var nmHtml = name ? '(' + E(name) + ')' : '(' + dots('140px') + ')';
-      var posHtml = posLabel ? 'ตำแหน่ง&nbsp;' + ul(posLabel, '130px') : 'ตำแหน่ง&nbsp;' + dots('130px');
-      var dtHtml;
-      if (dateStr) {
-        var dp2 = dp(dateStr.indexOf('T') > -1 ? dateStr : (dateStr + 'T00:00:00'));
-        dtHtml = dp2.d
-          ? 'วันที่&nbsp;<u>' + toThaiNum(dp2.d) + '</u>&nbsp;เดือน&nbsp;<u>' + dp2.m + '</u>&nbsp;พ.ศ.&nbsp;<u>' + toThaiNum(dp2.y) + '</u>'
-          : 'วันที่&nbsp;' + dots('26px') + '&nbsp;เดือน&nbsp;' + dots('72px') + '&nbsp;พ.ศ.&nbsp;' + dots('36px');
-      } else {
-        dtHtml = 'วันที่&nbsp;' + dots('26px') + '&nbsp;เดือน&nbsp;' + dots('72px') + '&nbsp;พ.ศ.&nbsp;' + dots('36px');
+      var nmHtml = '(' + dots('140px') + ')';
+      if (name) {
+        nmHtml = '(' + E(name) + ')';
       }
-      var sigImg = sigUrl
-        ? '<img src="' + E(sigUrl) + '" alt="" style="max-height:46px;max-width:160px;object-fit:contain;display:inline-block;">'
-        : '';
+      var posHtml = 'ตำแหน่ง&nbsp;' + dots('130px');
+      if (posLabel) {
+        posHtml = 'ตำแหน่ง&nbsp;' + ul(posLabel, '130px');
+      }
+      var dtHtml = 'วันที่&nbsp;' + dots('26px') + '&nbsp;เดือน&nbsp;' + dots('72px') + '&nbsp;พ.ศ.&nbsp;' + dots('36px');
+      if (dateStr) {
+        var ds = dateStr;
+        if (ds.indexOf('T') === -1) {
+          ds = ds + 'T00:00:00';
+        }
+        var dp2 = dp(ds);
+        if (dp2.d) {
+          dtHtml = 'วันที่&nbsp;<u>' + _toThaiNum(dp2.d) + '</u>&nbsp;เดือน&nbsp;<u>' + dp2.m + '</u>&nbsp;พ.ศ.&nbsp;<u>' + _toThaiNum(dp2.y) + '</u>';
+        }
+      }
+      var sigImg = '';
+      if (sigUrl) {
+        sigImg = '<img src="' + E(sigUrl) + '" alt="" style="max-height:46px;max-width:160px;object-fit:contain;display:inline-block;">';
+      }
       return '<div class="sig-block">'
         + '<div class="space" style="display:flex;align-items:flex-end;justify-content:center;">' + sigImg + '</div>'
         + '<div>' + nmHtml + '</div>'
@@ -192,78 +241,80 @@ try {
         + '</div>';
     }
 
+    var destStr = String(r.destination || '').trim();
+    var finalDest = '-';
+    if (destStr) {
+      finalDest = destStr;
+    }
+    
+    var reqName = dash(r.requester_name);
+    var reqPos = E(r.position || r.department || '');
+    var reqPurpose = dash(r.purpose);
+    var reqNotesHTML = '';
+    if (r.notes) {
+      reqNotesHTML = '<div class="row" style="display:flex;align-items:baseline;padding-left:32px;"><span style="flex:1;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + E(r.notes) + '</span></div>';
+    }
+
+    var mayorName = data.mayorTitle || a3.pos || 'นายกเทศมนตรี';
+
+    var oStartStr = '';
+    if (oStart !== '-') oStartStr = _toThaiNum(oStart);
+    var oEndStr = '';
+    if (oEnd !== '-') oEndStr = _toThaiNum(oEnd);
+
     var pageHTML = ''
-      // Page
       + '<div class="page">'
       + '<div class="form-no">แบบ ๓</div>'
       + '<div class="form-title">ใบขออนุญาตใช้รถส่วนกลาง</div>'
-
-      // วันที่ (top right)
       + '<div class="date-line">'
-      + 'วันที่&nbsp;' + ul(toThaiNum(reqDP.d),'34px',true)
+      + 'วันที่&nbsp;' + ul(_toThaiNum(reqDP.d),'34px',true)
       + '&nbsp;เดือน&nbsp;' + ul(reqDP.m,'100px',true)
-      + '&nbsp;พ.ศ.&nbsp;' + ul(toThaiNum(reqDP.y),'52px',true)
+      + '&nbsp;พ.ศ.&nbsp;' + ul(_toThaiNum(reqDP.y),'52px',true)
       + '</div>'
-
-      // เรียน — ใช้นายกเทศมนตรี (ผู้อนุมัติสูงสุด)
-      + '<div class="row">เรียน&nbsp;' + ul(E(data.mayorTitle || a3.pos || 'นายกเทศมนตรี'),'240px') + '</div>'
-
-      // ข้าพเจ้า — flex เต็มบรรทัด
+      + '<div class="row">เรียน&nbsp;' + ul(E(mayorName),'240px') + '</div>'
       + '<div class="row indent" style="display:flex;align-items:baseline;">'
       + '<span style="white-space:nowrap">ข้าพเจ้า&nbsp;</span>'
-      + '<span style="flex:2;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + E(dash(r.requester_name)) + '</span>'
+      + '<span style="flex:2;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + E(reqName) + '</span>'
       + '<span style="white-space:nowrap">&nbsp;ตำแหน่ง&nbsp;</span>'
-      + '<span style="flex:3;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + E(r.position || r.department || '') + '</span>'
+      + '<span style="flex:3;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + reqPos + '</span>'
       + '</div>'
-
-      // ขออนุญาตใช้รถไป ณ — ใช้ปลายทางอย่างเดียว (ตัด "origin → " ออกถ้ามี)
       + '<div class="row" style="display:flex;align-items:baseline;">'
       + '<span style="white-space:nowrap">ขออนุญาตใช้รถไป ณ&nbsp;</span>'
-      + '<span style="flex:1;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + (function(){var dst=String(r.destination||'').trim();var arr=dst.split(/\s*[→>➜]\s*/);return E(arr[arr.length-1]||dst||'-');})() + '</span>'
+      + '<span style="flex:1;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + E(finalDest) + '</span>'
       + '</div>'
-
-      // เพื่อ ... มีคนนั่งรวม — ยาวเต็มบรรทัด
       + '<div class="row" style="display:flex;align-items:baseline;">'
       + '<span style="white-space:nowrap">เพื่อ&nbsp;</span>'
-      + '<span style="flex:1;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + E(dash(r.purpose)) + '</span>'
+      + '<span style="flex:1;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + E(reqPurpose) + '</span>'
       + '<span style="white-space:nowrap">&nbsp;มีคนนั่งรวม&nbsp;</span>'
-      + ul(toThaiNum(pax),'36px',true)
+      + ul(_toThaiNum(pax),'36px',true)
       + '<span>&nbsp;คน</span>'
       + '</div>'
-      + (r.notes ? '<div class="row" style="display:flex;align-items:baseline;padding-left:32px;">' + '<span style="flex:1;display:inline-block;border-bottom:1px dashed #000;padding:0 4px;">' + E(r.notes) + '</span></div>' : '')
-
-      // เดินทาง — table layout (fits on one row)
+      + reqNotesHTML
       + '<table class="travel-tbl"><tbody>'
       + '<tr>'
       + '<td class="lbl">เดินทาง&nbsp;(ไป)</td>'
-      + '<td>วันที่&nbsp;</td><td class="fld" style="min-width:28px">' + toThaiNum(goDP.d||'') + '</td>'
+      + '<td>วันที่&nbsp;</td><td class="fld" style="min-width:28px">' + _toThaiNum(goDP.d||'') + '</td>'
       + '<td>&nbsp;เดือน&nbsp;</td><td class="fld" style="min-width:78px">' + (goDP.m||'') + '</td>'
-      + '<td>&nbsp;พ.ศ.&nbsp;</td><td class="fld" style="min-width:42px">' + toThaiNum(goDP.y||'') + '</td>'
-      + '<td>&nbsp;เวลา&nbsp;</td><td class="fld" style="min-width:46px">' + toThaiNum(dTime||'') + '</td><td>&nbsp;น.</td>'
-      + '<td>&nbsp;เลขไมล์&nbsp;</td><td class="fld" style="min-width:60px">' + (oStart!=='-'?toThaiNum(oStart):'') + '</td><td>&nbsp;กม.</td>'
+      + '<td>&nbsp;พ.ศ.&nbsp;</td><td class="fld" style="min-width:42px">' + _toThaiNum(goDP.y||'') + '</td>'
+      + '<td>&nbsp;เวลา&nbsp;</td><td class="fld" style="min-width:46px">' + _toThaiNum(dTime||'') + '</td><td>&nbsp;น.</td>'
+      + '<td>&nbsp;เลขไมล์&nbsp;</td><td class="fld" style="min-width:60px">' + oStartStr + '</td><td>&nbsp;กม.</td>'
       + '</tr>'
       + '<tr>'
       + '<td class="lbl">เดินทาง&nbsp;(กลับ)&nbsp;ถึงวันที่</td>'
-      + '<td></td><td class="fld" style="min-width:28px">' + toThaiNum(bkDP.d||'') + '</td>'
+      + '<td></td><td class="fld" style="min-width:28px">' + _toThaiNum(bkDP.d||'') + '</td>'
       + '<td>&nbsp;เดือน&nbsp;</td><td class="fld" style="min-width:78px">' + (bkDP.m||'') + '</td>'
-      + '<td>&nbsp;พ.ศ.&nbsp;</td><td class="fld" style="min-width:42px">' + toThaiNum(bkDP.y||'') + '</td>'
-      + '<td>&nbsp;เวลา&nbsp;</td><td class="fld" style="min-width:46px">' + toThaiNum(rTime||'') + '</td><td>&nbsp;น.</td>'
-      + '<td>&nbsp;เลขไมล์&nbsp;</td><td class="fld" style="min-width:60px">' + (oEnd!=='-'?toThaiNum(oEnd):'') + '</td><td>&nbsp;กม.</td>'
+      + '<td>&nbsp;พ.ศ.&nbsp;</td><td class="fld" style="min-width:42px">' + _toThaiNum(bkDP.y||'') + '</td>'
+      + '<td>&nbsp;เวลา&nbsp;</td><td class="fld" style="min-width:46px">' + _toThaiNum(rTime||'') + '</td><td>&nbsp;น.</td>'
+      + '<td>&nbsp;เลขไมล์&nbsp;</td><td class="fld" style="min-width:60px">' + oEndStr + '</td><td>&nbsp;กม.</td>'
       + '</tr>'
       + '</tbody></table>'
-
-      // ============ Signature Section ============
       + '<div class="sig-wrap">'
-
-      // Row 1: ผู้ขออนุญาต | ผู้ขับรถยนต์
       + '<div class="sig-pair">'
       + '<div class="s"><div class="sig-role">(ลงชื่อ)</div>'
       + sigBlock(r.requester_name, r.position || r.department || '', '', r.requester_signature || '') + '</div>'
       + '<div class="s"><div class="sig-role">(ลงชื่อ)</div>'
       + sigBlock(driverName, driverPos, '', dr.signature || '') + '</div>'
       + '</div>'
-
-      // Row 2: ผู้บังคับบัญชา
       + '<div class="sig-pair-header">ผู้บังคับบัญชา</div>'
       + '<div class="sig-pair">'
       + '<div class="s"><div class="sig-role">(ลงชื่อ)</div>'
@@ -271,121 +322,149 @@ try {
       + '<div class="s"><div class="sig-role">(ลงชื่อ)</div>'
       + sigBlock(a2.name, a2.pos || (a2.name ? 'ปลัดเทศบาล' : ''), a2.date, a2.sig) + '</div>'
       + '</div>'
-
-      // Row 3: นายกเทศมนตรี
       + '<div class="sig-single">'
       + '<div class="s"><div class="sig-role">(ลงชื่อ)</div>'
       + sigBlock(a3.name, a3.pos || (a3.name ? 'นายกเทศมนตรี' : ''), a3.date, a3.sig) + '</div>'
       + '</div>'
-      + '</div>'  // sig-wrap
-
-      // Footer
+      + '</div>'  
       + '<div class="footer-line"></div>'
       + '<div class="row"><b>หมายเหตุ</b>&nbsp;' + ul(vehDetail || '','100%') + '</div>'
       + '<div style="margin-top:4px;">' + dots('100%') + '</div>'
+      + '</div>';  
 
-      + '</div>';  // page
-
-    return { pageHTML: pageHTML, title: r.request_no || '' };
+    var t = r.request_no || '';
+    return { pageHTML: pageHTML, title: t };
   };
 
-  // ===== Wrapper สำหรับโหมดใบเดียว =====
   Views.printForm3 = function(data, cfg) {
     var p = Views._form3PageHTML(data, cfg);
     return '<!DOCTYPE html>'
       + '<html lang="th"><head><meta charset="UTF-8">'
-      + '<title>แบบ ๓ ใบขออนุญาตใช้รถส่วนกลาง – ' + Views._esc(p.title) + '</title>'
+      + '<title>แบบ ๓ ใบขออนุญาตใช้รถส่วนกลาง – ' + E(p.title) + '</title>'
       + '<link href="https://fonts.googleapis.com/css2?family=Sarabun:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">'
       + '<style>' + _FORM3_CSS + '</style>'
-      + '</head><body>'
+      + '</head><body onload="setTimeout(function(){window.print();},500);">'
       + '<div class="toolbar">'
       + '<button class="btn-p" onclick="window.print()">พิมพ์เอกสาร</button>'
       + '<button class="btn-c" onclick="window.close()">ปิด</button>'
       + '</div>'
       + p.pageHTML
-      + '<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},500);});<\/script>'
       + '</body></html>';
   };
 
-  // ===== Batch สำหรับพิมพ์แบบ ๓ รายเดือน (หลายใบติดกัน) =====
-  // items: [{ request, history, trip, vehicle, driver, approvers, mayorTitle }, ...]
-  // meta:  { period: 'พฤษภาคม 2569', plate: 'กข-1234' }
   Views.printForm3Batch = function(items, cfg, meta) {
-    items = Array.isArray(items) ? items : [];
-    meta  = meta || {};
-    var allPages = items.map(function(it) {
-      return Views._form3PageHTML(it, cfg).pageHTML;
-    }).join('');
-    var titleSuffix = (meta.plate ? ' ' + meta.plate : '') + (meta.period ? ' ' + meta.period : '');
-    var emptyMsg = items.length ? '' :
-      '<div class="page" style="display:flex;align-items:center;justify-content:center;font-size:18pt;color:#94a3b8;">ไม่พบคำขอที่ใช้รถคันนี้ในเดือนที่เลือก</div>';
+    var itms = [];
+    if (Array.isArray(items)) {
+      itms = items;
+    }
+    var mData = meta || {};
+    var allPages = '';
+    for (var i=0; i<itms.length; i++) {
+      allPages += Views._form3PageHTML(itms[i], cfg).pageHTML;
+    }
+    
+    var titleSuffix = '';
+    if (mData.plate) titleSuffix += ' ' + mData.plate;
+    if (mData.period) titleSuffix += ' ' + mData.period;
+    
+    var emptyMsg = '<div class="page" style="display:flex;align-items:center;justify-content:center;font-size:18pt;color:#94a3b8;">ไม่พบคำขอที่ใช้รถคันนี้ในเดือนที่เลือก</div>';
+    var bodyTag = '<body>';
+    
+    if (itms.length > 0) {
+      emptyMsg = '';
+      bodyTag = '<body onload="setTimeout(function(){window.print();},800);">';
+    }
+
+    var headerText = 'แบบ ๓ รายเดือน';
+    if (mData.plate) headerText += ' · ' + mData.plate;
+    if (mData.period) headerText += ' · ' + mData.period;
+    headerText += ' · จำนวน ' + itms.length + ' ใบ';
+
     return '<!DOCTYPE html>'
       + '<html lang="th"><head><meta charset="UTF-8">'
-      + '<title>แบบ ๓ รายเดือน' + Views._esc(titleSuffix) + '</title>'
+      + '<title>แบบ ๓ รายเดือน' + E(titleSuffix) + '</title>'
       + '<link href="https://fonts.googleapis.com/css2?family=Sarabun:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">'
       + '<style>' + _FORM3_CSS + '</style>'
-      + '</head><body>'
+      + '</head>' + bodyTag
       + '<div class="toolbar">'
-      + '<span style="margin-right:auto;font-weight:600;">แบบ ๓ รายเดือน · ' + Views._esc(meta.plate || '') + ' · ' + Views._esc(meta.period || '') + ' · จำนวน ' + items.length + ' ใบ</span>'
+      + '<span style="margin-right:auto;font-weight:600;">' + E(headerText) + '</span>'
       + '<button class="btn-p" onclick="window.print()">พิมพ์เอกสาร</button>'
       + '<button class="btn-c" onclick="window.close()">ปิด</button>'
       + '</div>'
-      + (allPages || emptyMsg)
-      + (items.length ? '<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},800);});<\/script>' : '')
+      + allPages 
+      + emptyMsg
       + '</body></html>';
   };
 
-  // ===============================================================
-  //  แบบ 4 — สรุปการใช้รถราชการ
-  // ===============================================================
+  // ==========================================
+  // 2. โครงสร้างแบบ 4
+  // ==========================================
   Views.printForm4 = function(data, cfg) {
-    var items   = data.items   || [];
-    var period  = data.period  || '';                    // เช่น "เมษายน ๒๕๖๙" (จะแปลงให้ถ้ายังไม่ใช่เลขไทย)
-    var plate   = data.plate   || '';                    // หมายเลขทะเบียนรถ
-    var recName = (data.recorder && data.recorder.name) || (cfg && cfg.recorderName) || '';
-    var recPos  = (data.recorder && data.recorder.position) || (cfg && cfg.recorderPosition) || '';
-    var recSig  = (data.recorder && data.recorder.signature) || '';
-    var E       = Views._esc;
-    var D       = Views._thDate;
-    // แปลง period ให้เป็นเลขไทยถ้ายังเป็นเลขอารบิก
+    var items = data.items || [];
+    var period = data.period || '';                    
+    var plate = data.plate || '';                    
+    var recName = '';
+    if (data.recorder && data.recorder.name) {
+      recName = data.recorder.name;
+    } else if (cfg && cfg.recorderName) {
+      recName = cfg.recorderName;
+    }
+    
+    var recPos = '';
+    if (data.recorder && data.recorder.position) {
+      recPos = data.recorder.position;
+    } else if (cfg && cfg.recorderPosition) {
+      recPos = cfg.recorderPosition;
+    }
+    
+    var recSig = '';
+    if (data.recorder && data.recorder.signature) {
+      recSig = data.recorder.signature;
+    }
+    
     var periodTH = _toThaiNum(period);
-
     var totalDist = 0;
-    var rows = items.map(function(r, idx) {
-      var tr = r.trip || {};
-      var oStart = Number(tr.start_mileage || tr.odometer_start || r.start_mileage || r.odometer_start || 0);
-      var oEnd   = Number(tr.end_mileage   || tr.odometer_end   || r.end_mileage   || r.odometer_end   || 0);
-      var dist   = Number(tr.distance) || ((oEnd > oStart) ? (oEnd - oStart) : 0);
-      totalDist += dist;
-      return '<tr>'
-        + '<td class="c">' + _toThaiNum(idx+1) + '</td>'
-        // ออกเดินทาง: วันที่ + เวลา
-        + '<td class="c">' + E(_thDateLong(r.depart_date || r.start_datetime)) + '</td>'
-        + '<td class="c">' + _toThaiNum(_fmtTime(r.depart_time || '')) + '</td>'
-        // ผู้ใช้ยานพาหนะ
-        + '<td class="l">' + E(r.requester_name || '') + '</td>'
-        // สถานที่ไป
-        + '<td class="l">' + E(r.destination || '') + '</td>'
-        // ระยะ กม. เมื่อออก
-        + '<td class="c">' + _toThaiNum(oStart || '') + '</td>'
-        // กลับถึงสำนักงาน: วันที่ + เวลา
-        + '<td class="c">' + E(_thDateLong(r.return_date || r.end_datetime || '')) + '</td>'
-        + '<td class="c">' + _toThaiNum(_fmtTime(r.return_time || '')) + '</td>'
-        // ระยะ กม. เมื่อกลับ
-        + '<td class="c">' + _toThaiNum(oEnd || '') + '</td>'
-        // รวมระยะทาง
-        + '<td class="c">' + _toThaiNum(dist || '') + '</td>'
-        // พนักงานขับรถ
-        + '<td class="l">' + E(r.driver_name || '') + '</td>'
-        // หมายเหตุ
-        + '<td class="l">' + E(r.note || r.remark || '') + '</td>'
-        + '</tr>';
-    }).join('');
+    var rows = '';
 
-    // จำนวนแถวว่างเพิ่มเติม — เผื่อพื้นที่ summary + signoff (มี sig-line 22mm) ให้พอ 1 หน้า
-    var minRows = items.length <= 8 ? 8 : items.length;
+    for (var j=0; j<items.length; j++) {
+      var rObj = items[j];
+      var tr = rObj.trip || {};
+      var oStart = Number(tr.start_mileage || tr.odometer_start || rObj.start_mileage || rObj.odometer_start || 0);
+      var oEnd   = Number(tr.end_mileage   || tr.odometer_end   || rObj.end_mileage   || rObj.odometer_end   || 0);
+      var dist   = Number(tr.distance);
+      if (isNaN(dist) || !dist) {
+         if (oEnd > oStart) dist = oEnd - oStart;
+         else dist = 0;
+      }
+      totalDist += dist;
+      
+      var oStartStr = oStart ? _toThaiNum(oStart) : '';
+      var oEndStr = oEnd ? _toThaiNum(oEnd) : '';
+      var distStr = dist ? _toThaiNum(dist) : '';
+
+      rows += '<tr>'
+        + '<td class="c">' + _toThaiNum(j+1) + '</td>'
+        + '<td class="c">' + E(_thDateLong(rObj.depart_date || rObj.start_datetime)) + '</td>'
+        + '<td class="c">' + _toThaiNum(_fmtTime(rObj.depart_time || '')) + '</td>'
+        + '<td class="l">' + E(rObj.requester_name || '') + '</td>'
+        + '<td class="l">' + E(rObj.destination || '') + '</td>'
+        + '<td class="c">' + oStartStr + '</td>'
+        + '<td class="c">' + E(_thDateLong(rObj.return_date || rObj.end_datetime || '')) + '</td>'
+        + '<td class="c">' + _toThaiNum(_fmtTime(rObj.return_time || '')) + '</td>'
+        + '<td class="c">' + oEndStr + '</td>'
+        + '<td class="c">' + distStr + '</td>'
+        + '<td class="l">' + E(rObj.driver_name || '') + '</td>'
+        + '<td class="l">' + E(rObj.note || rObj.remark || '') + '</td>'
+        + '</tr>';
+    }
+
+    var minRows = 8;
+    if (items.length > 8) {
+      minRows = items.length;
+    }
+    
     var emptyRows = '';
-    for (var i = items.length; i < minRows; i++) {
+    for (var k = items.length; k < minRows; k++) {
       emptyRows += '<tr>'
         + '<td class="c">&nbsp;</td>'
         + '<td></td><td></td>'
@@ -400,24 +479,49 @@ try {
         + '</tr>';
     }
 
-    // ====== HTML output ======
-    // หัวเอกสารใส่ใน <thead> ที่ colspan=12 → จะ repeat อัตโนมัติทุกหน้าเมื่อ table แตกหน้า
+    var plateHTML = '&nbsp;';
+    if (plate) {
+      plateHTML = E(plate);
+    }
+    var periodHTML = '';
+    if (periodTH) {
+      periodHTML = '<div class="t3">ประจำเดือน ' + E(periodTH) + '</div>';
+    }
+
     var headerRow = ''
       + '<tr class="h-title"><th colspan="12" class="cap">'
       + '<div class="cap-grid">'
       + '<div class="cap-l">&nbsp;</div>'
       + '<div class="cap-c">'
       +   '<div class="t1">บันทึกการใช้ยานพาหนะส่วนกลาง/รถรับรอง</div>'
-      +   '<div class="t2">หมายเลขทะเบียน <span class="u">' + (plate ? E(plate) : '&nbsp;') + '</span></div>'
-      +   (periodTH ? '<div class="t3">ประจำเดือน ' + E(periodTH) + '</div>' : '')
+      +   '<div class="t2">หมายเลขทะเบียน <span class="u">' + plateHTML + '</span></div>'
+      +   periodHTML
       + '</div>'
       + '<div class="cap-r"><span class="form-no">แบบ ๔</span></div>'
       + '</div>'
       + '</th></tr>';
 
+    var docTitle = 'แบบ ๔';
+    if (periodTH) docTitle += ' – ' + periodTH;
+    if (plate) docTitle += ' – ' + plate;
+
+    var sumRow = '';
+    if (items.length > 0) {
+      sumRow = '<tr>'
+        + '<td colspan="9" class="c" style="font-weight:700;">รวมทั้งสิ้น</td>'
+        + '<td class="c" style="font-weight:700;">' + _toThaiNum(totalDist) + '</td>'
+        + '<td colspan="2"></td>'
+        + '</tr>';
+    }
+
+    var sigImageHTML = '&nbsp;';
+    if (recSig) {
+      sigImageHTML = '<img src="' + E(recSig) + '" alt="" style="max-height:20mm;max-width:60mm;object-fit:contain;display:inline-block;">';
+    }
+
     return '<!DOCTYPE html>'
       + '<html lang="th"><head><meta charset="UTF-8">'
-      + '<title>แบบ ๔' + (periodTH ? ' – ' + E(periodTH) : '') + (plate ? ' – ' + E(plate) : '') + '</title>'
+      + '<title>' + E(docTitle) + '</title>'
       + '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700&display=swap" rel="stylesheet">'
       + '<style>'
       + '* { box-sizing: border-box; margin: 0; padding: 0; }'
@@ -433,7 +537,6 @@ try {
       + 'td { height: 28px; }'
       + 'td.c { text-align: center; }'
       + 'td.l { text-align: left; }'
-      // หัวเอกสาร (colspan=12) ใน thead
       + 'th.cap { border: none !important; padding: 0 0 6px; background: #fff; }'
       + '.cap-grid { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 8px; }'
       + '.cap-l, .cap-r { font-weight: 700; }'
@@ -442,16 +545,14 @@ try {
       + '.cap-c .t2 { font-size: 12pt; font-weight: 400; margin-top: 2px; }'
       + '.cap-c .t3 { font-size: 12pt; font-weight: 400; margin-top: 2px; }'
       + '.cap-c .u  { display: inline-block; border-bottom: 1px solid #000; min-width: 180px; padding: 0 8px; text-align: center; }'
-      + '.form-no   { font-size: 14pt; font-weight: 700; }'
-      // ทำให้ table แตกหน้าได้สวยขึ้น และ thead repeat
+      + '.form-no  { font-size: 14pt; font-weight: 700; }'
       + 'thead { display: table-header-group; }'
-      + 'tfoot { display: table-row-group; }'    // tfoot ขึ้นเฉพาะหน้าสุดท้าย
+      + 'tfoot { display: table-row-group; }'
       + 'tr { page-break-inside: avoid; }'
-      // ส่วนท้าย "ผู้บันทึก / ตำแหน่ง" — ใส่เป็นแถวสุดท้ายใน tbody (เสถียรทุก browser)
       + 'tr.sign-row td { border: none !important; padding: 6px 8mm 4px 0 !important; height: auto !important; background: #fff; text-align: right; }'
       + 'tr.sign-row { page-break-inside: avoid; }'
       + '.signoff-box { display: inline-block; text-align: center; min-width: 300px; font-size: 12pt; line-height: 1.4; }'
-      + '.sig-line { display: block; height: 22mm; min-height: 22mm; }'  /* เว้นพื้นที่ลายเซ็น */
+      + '.sig-line { display: block; height: 22mm; min-height: 22mm; }'
       + '.sig-name, .sig-pos { display: block; margin-top: 4px; white-space: nowrap; }'
       + '.sig-name .ln, .sig-pos .ln { display: inline-block; border-bottom: 1px dotted #000; min-width: 200px; padding: 0 6px; text-align: center; }'
       + '@media print {'
@@ -459,7 +560,7 @@ try {
       + '  .toolbar { display: none !important; }'
       + '  .page { box-shadow: none; margin: 0; padding: 0; width: 100%; min-height: auto; }'
       + '  @page { size: A4 landscape; margin: 12mm 14mm 16mm 14mm; '
-      +          '@bottom-right { content: "หน้า " counter(page) " / " counter(pages); font-family: "Sarabun","TH Sarabun New",sans-serif; font-size: 10pt; } }'
+      + '          @bottom-right { content: "หน้า " counter(page) " / " counter(pages); font-family: "Sarabun","TH Sarabun New",sans-serif; font-size: 10pt; } }'
       + '}'
       + '</style></head><body>'
       + '<div class="toolbar">'
@@ -469,22 +570,22 @@ try {
       + '<div class="page">'
       + '<table>'
       + '<colgroup>'
-      + '<col style="width:4%">'    // ลำดับที่
-      + '<col style="width:11%">'   // ออก-วันที่ (กว้างขึ้นให้ชื่อเดือนครบบรรทัดเดียว)
-      + '<col style="width:5%">'    // ออก-เวลา
-      + '<col style="width:11%">'   // ผู้ใช้ยานพาหนะ
-      + '<col style="width:13%">'   // สถานที่ไป
-      + '<col style="width:8%">'    // ระยะ กม.เมื่อออก
-      + '<col style="width:11%">'   // กลับ-วันที่
-      + '<col style="width:5%">'    // กลับ-เวลา
-      + '<col style="width:8%">'    // ระยะ กม.เมื่อกลับ
-      + '<col style="width:8%">'    // รวมระยะทาง
-      + '<col style="width:9%">'    // พนักงานขับรถ
-      + '<col style="width:7%">'    // หมายเหตุ
+      + '<col style="width:4%">'
+      + '<col style="width:11%">'
+      + '<col style="width:5%">'
+      + '<col style="width:11%">'
+      + '<col style="width:13%">'
+      + '<col style="width:8%">'
+      + '<col style="width:11%">'
+      + '<col style="width:5%">'
+      + '<col style="width:8%">'
+      + '<col style="width:8%">'
+      + '<col style="width:9%">'
+      + '<col style="width:7%">'
       + '</colgroup>'
       + '<thead>'
-      + headerRow                                     // (1) หัวเอกสาร
-      + '<tr>'                                        // (2) แถวหัวคอลัมน์ใหญ่
+      + headerRow
+      + '<tr>'
       + '<th rowspan="2">ลำดับที่</th>'
       + '<th colspan="2">ออกเดินทาง</th>'
       + '<th rowspan="2">ผู้ใช้<br>ยานพาหนะ</th>'
@@ -496,23 +597,17 @@ try {
       + '<th rowspan="2">พนักงาน<br>ขับรถ</th>'
       + '<th rowspan="2">หมายเหตุ</th>'
       + '</tr>'
-      + '<tr>'                                        // (3) แถวหัวย่อย
+      + '<tr>'
       + '<th>วันที่</th><th>เวลา</th>'
       + '<th>วันที่</th><th>เวลา</th>'
       + '</tr>'
       + '</thead>'
       + '<tbody>' + rows + emptyRows
-      +   (items.length ? ('<tr>'
-            + '<td colspan="9" class="c" style="font-weight:700;">รวมทั้งสิ้น</td>'
-            + '<td class="c" style="font-weight:700;">' + _toThaiNum(totalDist) + '</td>'
-            + '<td colspan="2"></td>'
-            + '</tr>') : '')
+      + sumRow
       +   '<tr class="sign-row"><td colspan="12">'
       +     '<div class="signoff-box">'
       +       '<div class="sig-line" style="text-align:center;">'
-      +         (recSig
-      +           ? '<img src="' + E(recSig) + '" alt="" style="max-height:20mm;max-width:60mm;object-fit:contain;display:inline-block;">'
-      +           : '&nbsp;')
+      +         sigImageHTML
       +       '</div>'
       +       '<div class="sig-name">ผู้บันทึก <span class="ln">' + E(recName) + '</span></div>'
       +       '<div class="sig-pos">ตำแหน่ง <span class="ln">' + E(recPos) + '</span></div>'
@@ -524,17 +619,11 @@ try {
       + '</body></html>';
   };
 
-  /* mark printForms as loaded */
   window.__VIEWS_BOOT__ = window.__VIEWS_BOOT__ || { errors: [] };
   window.__VIEWS_BOOT__.printLoaded = true;
+
+  console.log("✅ [ViewsPrint] โหลดไฟล์สำเร็จ 100%");
 } catch (e) {
-  window.__VIEWS_BOOT__ = window.__VIEWS_BOOT__ || { errors: [] };
-  window.__VIEWS_BOOT__.errors.push({
-    src: 'ViewsPrint',
-    message: (e && e.message) || String(e)
-  });
-  if (window.console && console.error) {
-    console.error('[ViewsPrint.html] error:', e);
-  }
+  console.error("❌ [ViewsPrint] เกิดข้อผิดพลาด:", e);
 }
 </script>
